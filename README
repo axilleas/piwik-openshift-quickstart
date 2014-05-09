@@ -1,37 +1,51 @@
-Piwik on OpenShift
-=========================
-Piwik is a downloadable, open source (GPL licensed) real time web analytics software program. It provides you with detailed reports on your website visitors: the search engines and keywords they used, the language they speak, your popular pages, and so much more.
+Feel free to change or remove this file, it is informational only.
 
-Piwik aims to be an open source alternative to Google Analytics, and is already used on more than 150,000 websites. 
+Repo layout
+===========
+php/ - Externally exposed php code goes here
+libs/ - Additional libraries
+misc/ - For not-externally exposed php code
+../data - For persistent data (full path in environment var: OPENSHIFT_DATA_DIR)
+.openshift/pear.txt - list of pears to install
+.openshift/action_hooks/pre_build - Script that gets run every git push before the build
+.openshift/action_hooks/build - Script that gets run every git push as part of the build process (on the CI system if available)
+.openshift/action_hooks/deploy - Script that gets run every git push after build but before the app is restarted
+.openshift/action_hooks/post_deploy - Script that gets run every git push after the app is restarted
 
-More information can be found on the official Piwik website at http://piwik.org
 
-Running on OpenShift
---------------------
+Notes about layout
+==================
+Please leave php, libs and data directories but feel free to create additional
+directories if needed.
 
-Create an account at http://openshift.redhat.com/
+Note: Every time you push, everything in your remote repo dir gets recreated
+please store long term items (like an sqlite database) in ../data which will
+persist between pushes of your repo.
 
-Create a PHP application
 
-	rhc app create -a piwik -t php-5.3
+Environment Variables
+=====================
 
-Add mysql support to your application
-    
-	rhc cartridge add -a piwik -c mysql-5.1
-Make a note of the username, password, and host name as you will need to use these to complete the Piwik installation on OpenShift
+OpenShift provides several environment variables to reference for ease
+of use.  The following list are some common variables but far from exhaustive:
 
-Add this upstream Piwik quickstart repo
+    getenv('OPENSHIFT_APP_NAME')  - Application name
+    getenv('OPENSHIFT_DATA_DIR')  - For persistent storage (between pushes)
+    getenv('OPENSHIFT_TMP_DIR')   - Temp storage (unmodified files deleted after 10 days)
 
-	cd piwik/php
-	rm -rf *
-	git remote add upstream -m master git://github.com/gshipley/piwik-openshift-quickstart.git
-	git pull -s recursive -X theirs upstream master
+When embedding a database using 'rhc cartridge add', you can reference environment
+variables for username, host and password:
 
-Then push the repo upstream to OpenShift
+    getenv('OPENSHIFT_MYSQL_DB_HOST')      - DB host
+    getenv('OPENSHIFT_MYSQL_DB_PORT')      - DB Port
+    getenv('OPENSHIFT_MYSQL_DB_USERNAME')  - DB Username
+    getenv('OPENSHIFT_MYSQL_DB_PASSWORD')  - DB Password
 
-	git push
+To get a full list of environment variables, simply add a line in your
+.openshift/action_hooks/build script that says "export" and push.
 
-That's it, you can now checkout your application at:
+pear.txt
+===========
 
-	http://piwik-$yourlogin.rhcloud.com
-
+A list of pears to install, line by line on the server.  This will happen when
+the user git pushes.
