@@ -1,60 +1,89 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
+ *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: ColumnCallbackAddMetadata.php 4169 2011-03-23 01:59:57Z matt $
- * 
- * @category Piwik
- * @package Piwik
+ *
  */
+namespace Piwik\DataTable\Filter;
+
+use Piwik\DataTable;
+use Piwik\DataTable\BaseFilter;
 
 /**
- * Add a new 'metadata' column to the table based on the value resulting 
- * from a callback function with the parameter being another column's value
+ * Executes a callback for each row of a {@link DataTable} and adds the result as a new
+ * row metadata value.
  * 
- * For example from the "label" column we can to create an "icon" 'metadata' column 
- * with the icon URI built from the label (LINUX => UserSettings/icons/linux.png)
+ * **Basic usage example**
  * 
- * @package Piwik
- * @subpackage Piwik_DataTable
+ *     $dataTable->filter('ColumnCallbackAddMetadata', array('label', 'logo', 'Piwik\Plugins\MyPlugin\getLogoFromLabel'));
+ * 
+ * @api
  */
-class Piwik_DataTable_Filter_ColumnCallbackAddMetadata extends Piwik_DataTable_Filter
+class ColumnCallbackAddMetadata extends BaseFilter
 {
-	private $columnToRead;
-	private $functionToApply;
-	private $functionParameters;
-	private $metadataToAdd;
-	
-	public function __construct( $table, $columnToRead, $metadataToAdd, $functionToApply = null, $functionParameters = null )
-	{
-		parent::__construct($table);
-		$this->functionToApply = $functionToApply;
-		$this->functionParameters = $functionParameters;
-		$this->columnToRead = $columnToRead;
-		$this->metadataToAdd = $metadataToAdd;
-	}
-	
-	public function filter($table)
-	{
-		foreach($table->getRows() as $key => $row)
-		{
-			$oldValue = $row->getColumn($this->columnToRead);
-			$parameters = array($oldValue);
-			if(!is_null($this->functionParameters))
-			{
-				$parameters = array_merge($parameters, $this->functionParameters);
-			}
-			if(!is_null($this->functionToApply))
-			{
-				$newValue = call_user_func_array( $this->functionToApply, $parameters);
-			}
-			else
-			{
-				$newValue = $oldValue;
-			}
-			$row->addMetadata($this->metadataToAdd, $newValue);
-		}
-	}
+    private $columnsToRead;
+    private $functionToApply;
+    private $functionParameters;
+    private $metadataToAdd;
+    private $applyToSummaryRow;
+
+    /**
+     * Constructor.
+     * 
+     * @param DataTable $table The DataTable instance that will be filtered.
+     * @param string|array $columnsToRead The columns to read from each row and pass on to the callback.
+     * @param string $metadataToAdd The name of the metadata field that will be added to each row.
+     * @param callable $functionToApply The callback to apply for each row.
+     * @param array $functionParameters deprecated - use an [anonymous function](http://php.net/manual/en/functions.anonymous.php)
+     *                                  instead.
+     * @param bool $applyToSummaryRow Whether the callback should be applied to the summary row or not.
+     */
+    public function __construct($table, $columnsToRead, $metadataToAdd, $functionToApply = null,
+                                $functionParameters = null, $applyToSummaryRow = true)
+    {
+        parent::__construct($table);
+
+        if (!is_array($columnsToRead)) {
+            $columnsToRead = array($columnsToRead);
+        }
+        $this->columnsToRead = $columnsToRead;
+
+        $this->functionToApply = $functionToApply;
+        $this->functionParameters = $functionParameters;
+        $this->metadataToAdd = $metadataToAdd;
+        $this->applyToSummaryRow = $applyToSummaryRow;
+    }
+
+    /**
+     * See {@link ColumnCallbackAddMetadata}.
+     *
+     * @param DataTable $table
+     */
+    public function filter($table)
+    {
+        foreach ($table->getRows() as $key => $row) {
+            if (!$this->applyToSummaryRow && $key == DataTable::ID_SUMMARY_ROW) {
+                continue;
+            }
+
+            $parameters = array();
+            foreach ($this->columnsToRead as $columnsToRead) {
+                $parameters[] = $row->getColumn($columnsToRead);
+            }
+
+            if (!is_null($this->functionParameters)) {
+                $parameters = array_merge($parameters, $this->functionParameters);
+            }
+            if (!is_null($this->functionToApply)) {
+                $newValue = call_user_func_array($this->functionToApply, $parameters);
+            } else {
+                $newValue = $parameters[0];
+            }
+            if ($newValue !== false) {
+                $row->addMetadata($this->metadataToAdd, $newValue);
+            }
+        }
+    }
 }

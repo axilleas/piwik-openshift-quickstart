@@ -1,514 +1,310 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
+ *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Action.php 4770 2011-05-22 21:26:47Z matt $
- * 
- * @category Piwik
- * @package Piwik
+ *
  */
 
-/**
- * Interface of the Action object.
- * New Action classes can be defined in plugins and used instead of the default one.
- * 
- * @package Piwik
- * @subpackage Piwik_Tracker
- */
-interface Piwik_Tracker_Action_Interface {
-	const TYPE_ACTION_URL   = 1;
-	const TYPE_OUTLINK  = 2;
-	const TYPE_DOWNLOAD = 3;
-	const TYPE_ACTION_NAME = 4;
-	const TYPE_ECOMMERCE_ITEM_SKU = 5;
-	const TYPE_ECOMMERCE_ITEM_NAME = 6;
-	const TYPE_ECOMMERCE_ITEM_CATEGORY = 7;
-	
-	public function setRequest($requestArray);
-	public function setIdSite( $idSite );
-	public function init();
-	public function getActionUrl();
-	public function getActionName();
-	public function getActionType();
-	public function record( $idVisit, $visitorIdCookie, $idRefererActionUrl, $idRefererActionName, $timeSpentRefererAction );
-	public function getIdActionUrl();
-	public function getIdActionName();
-	public function getIdLinkVisitAction();
-}
+namespace Piwik\Tracker;
+
+use Exception;
+use Piwik\Common;
+use Piwik\Piwik;
+use Piwik\Tracker;
 
 /**
- * Handles an action (page view, download or outlink) by the visitor.
- * Parses the action name and URL from the request array, then records the action in the log table.
- * 
- * @package Piwik
- * @subpackage Piwik_Tracker
+ * An action
+ *
  */
-class Piwik_Tracker_Action implements Piwik_Tracker_Action_Interface
+abstract class Action
 {
-	private $request;
-	private $idSite;
-	private $timestamp;
-	private $idLinkVisitAction;
-	private $idActionName = false;
-	private $idActionUrl = false;
+    const TYPE_PAGE_URL = 1;
+    const TYPE_OUTLINK = 2;
+    const TYPE_DOWNLOAD = 3;
+    const TYPE_PAGE_TITLE = 4;
+    const TYPE_ECOMMERCE_ITEM_SKU = 5;
+    const TYPE_ECOMMERCE_ITEM_NAME = 6;
+    const TYPE_ECOMMERCE_ITEM_CATEGORY = 7;
+    const TYPE_SITE_SEARCH = 8;
 
-	private $actionName;
-	private $actionType;
-	private $actionUrl;
-	
-	static private $queryParametersToExclude = array('phpsessid', 'jsessionid', 'sessionid', 'aspsessionid');
-	
-	public function setRequest($requestArray)
-	{
-		$this->request = $requestArray;
-	}
+    const TYPE_EVENT = 10; // Alias TYPE_EVENT_CATEGORY
+    const TYPE_EVENT_CATEGORY = 10;
+    const TYPE_EVENT_ACTION = 11;
+    const TYPE_EVENT_NAME = 12;
 
-	public function getRequest()
-	{
-	    return $this->request;
-	}
-	
-	/**
-	 * Returns URL of the page currently being tracked, or the file being downloaded, or the outlink being clicked
-	 * @return string
-	 */
-	public function getActionUrl()
-	{
-		return $this->actionUrl;
-	}
-	public function getActionName()
-	{
-		return $this->actionName;
-	}
-	public function getActionType()
-	{
-		return $this->actionType;
-	}
-	public function getActionNameType()
-	{
-		$actionNameType = null;
+    const DB_COLUMN_CUSTOM_FLOAT = 'custom_float';
 
-		// we can add here action types for names of other actions than page views (like downloads, outlinks)
-		switch( $this->getActionType() )
-		{
-			case Piwik_Tracker_Action_Interface::TYPE_ACTION_URL:
-				$actionNameType = Piwik_Tracker_Action_Interface::TYPE_ACTION_NAME;
-				break;
-		}
+    /**
+     * Makes the correct Action object based on the request.
+     *
+     * @param Request $request
+     * @return ActionClickUrl|ActionPageview|ActionSiteSearch
+     */
+    static public function factory(Request $request)
+    {
+        $downloadUrl = $request->getParam('download');
+        if (!empty($downloadUrl)) {
+            return new ActionClickUrl(self::TYPE_DOWNLOAD, $downloadUrl, $request);
+        }
 
-		return $actionNameType;
-	}
+        $outlinkUrl = $request->getParam('link');
+        if (!empty($outlinkUrl)) {
+            return new ActionClickUrl(self::TYPE_OUTLINK, $outlinkUrl, $request);
+        }
 
-	public function getIdActionUrl()
-	{
-		return $this->idActionUrl;
-	}
-	public function getIdActionName()
-	{
-		return $this->idActionName;
-	}
-	
-	protected function setActionName($name)
-	{
-		$name = $this->cleanupString($name);
-		$this->actionName = $name;
-	}
-	
-	protected function setActionType($type)
-	{
-		$this->actionType = $type;
-	}
-	
-	protected function setActionUrl($url)
-	{
-		$url = self::excludeQueryParametersFromUrl($url, $this->idSite);
-		$this->actionUrl = $url;
-	}
-	
-	static public function excludeQueryParametersFromUrl($originalUrl, $idSite)
-	{
-		$website = Piwik_Common::getCacheWebsiteAttributes( $idSite );
-		$originalUrl = Piwik_Common::unsanitizeInputValue($originalUrl);
-		$originalUrl = self::cleanupString($originalUrl);
-		$parsedUrl = @parse_url($originalUrl);
-		if(empty($parsedUrl['query']))
-		{
-			return $originalUrl;
-		}
-		$campaignTrackingParameters = Piwik_Common::getCampaignParameters();
-		
-		$campaignTrackingParameters = array_merge(
-				$campaignTrackingParameters[0], // campaign name parameters
-				$campaignTrackingParameters[1] // campaign keyword parameters
-		);	
-				
-		$excludedParameters = isset($website['excluded_parameters']) 
-									? $website['excluded_parameters'] 
-									: array();
-									
-		$parametersToExclude = array_merge( $excludedParameters, 
-											self::$queryParametersToExclude,
-											$campaignTrackingParameters);
-											
-		$parametersToExclude = array_map('strtolower', $parametersToExclude);
-		$queryParameters = Piwik_Common::getArrayFromQueryString($parsedUrl['query']);
-		
-		$validQuery = '';
-		$separator = '&';
-		foreach($queryParameters as $name => $value)
-		{
-			if(!in_array(strtolower($name), $parametersToExclude))
-			{
-				if (is_array($value))
-				{
-					foreach ($value as $param)
-					{
-						if($param === false)
-						{
-							$validQuery .= $name.'[]'.$separator;
-						}
-						else
-						{
-							$validQuery .= $name.'[]='.$param.$separator;
-						}
-					}
-				}
-				else if($value === false)
-				{
-					$validQuery .= $name.$separator;
-				}
-				else
-				{
-					$validQuery .= $name.'='.$value.$separator;
-				}
-			}
-		}
-		$parsedUrl['query'] = substr($validQuery,0,-strlen($separator));
-		$url = Piwik_Common::getParseUrlReverse($parsedUrl);
-		printDebug('Excluding parameters "'.implode(',',$excludedParameters).'" from URL');
-		if($originalUrl != $url)
-		{
-			printDebug(' Before was "'.$originalUrl.'"');
-			printDebug(' After is "'.$url.'"');
-		}
-		return $url;
-	}
-	
-	public function init()
-	{
-		$info = $this->extractUrlAndActionNameFromRequest();
-		$this->setActionName($info['name']);
-		$this->setActionType($info['type']);
-		$this->setActionUrl($info['url']);
-	}
-	
-	static public function getSqlSelectActionId()
-	{
-		$sql = "SELECT idaction, type, name
-							FROM ".Piwik_Common::prefixTable('log_action')
-						."  WHERE "
-						."		( hash = CRC32(?) AND name = ? AND type = ? ) ";
-		return $sql;
-	}
-	
-	/**
-	 * This function will find the idaction from the lookup table piwik_log_action,
-	 * given an Action name and type.
-	 * 
-	 * This is used to record Page URLs, Page Titles, Ecommerce items SKUs, item names, item categories
-	 * 
-	 * If the action name does not exist in the lookup table, it will INSERT it
-	 * @param array $actionNamesAndTypes Array of one or many (name,type)
-	 * @return array Returns the input array, with the idaction appended ie. Array of one or many (name,type,idaction)
-	 */
-	static public function loadActionId( $actionNamesAndTypes )
-	{
-		// First, we try and select the actions that are already recorded
-		$sql = self::getSqlSelectActionId();
-		$bind = array();
-		$i = 0;
-		foreach($actionNamesAndTypes as &$actionNameType)
-		{
-			list($name,$type) = $actionNameType;
-			if(empty($name))
-			{
-				$actionNameType[] = false;
-				continue;
-			}
-			if($i > 0)
-			{
-				$sql .= " OR ( hash = CRC32(?) AND name = ? AND type = ? ) ";
-			}
-			$bind[] = $name;
-			$bind[] = $name;
-			$bind[] = $type;
-			$i++;
-		}
-		// Case URL & Title are empty
-		if(empty($bind))
-		{
-			return $actionNamesAndTypes;
-		}
-		$actionIds = Piwik_Tracker::getDatabase()->fetchAll($sql, $bind);
-		
-		// For the Actions found in the lookup table, add the idaction in the array, 
-		// If not found in lookup table, queue for INSERT
-		$actionsToInsert = array();
-		foreach($actionNamesAndTypes as $index => &$actionNameType)
-		{
-			list($name,$type) = $actionNameType;
-			if(empty($name)) { continue; }
-			$found = false;
-			foreach($actionIds as $row)
-			{
-				if($name == $row['name']
-					&& $type == $row['type'])
-				{
-					$found = true;
-					$actionNameType[] = $row['idaction'];
-					continue;
-				}
-			}
-			if(!$found)
-			{
-				$actionsToInsert[] = $index;
-			}
-		}
-		
-		$sql = "INSERT INTO ". Piwik_Common::prefixTable('log_action'). 
-				"( name, hash, type ) VALUES (?,CRC32(?),?)";
-		// Then, we insert all new actions in the lookup table
-		foreach($actionsToInsert as $actionToInsert)
-		{
-			list($name,$type) = $actionNamesAndTypes[$actionToInsert];
-	
-			Piwik_Tracker::getDatabase()->query($sql, array($name, $name, $type));
-			$actionId = Piwik_Tracker::getDatabase()->lastInsertId();
-			printDebug("Recorded a new action (".self::getActionTypeName($type).") in the lookup table: ". $name . " (idaction = ".$actionId.")");
-			
-			$actionNamesAndTypes[$actionToInsert][] = $actionId;
-		}
-		return $actionNamesAndTypes;
-	}
-	
-	static public function getActionTypeName($type)
-	{
-		switch($type)
-		{
-			case self::TYPE_ACTION_URL: return 'Page URL'; break;
-			case self::TYPE_OUTLINK: return 'Outlink URL'; break;
-			case self::TYPE_DOWNLOAD: return 'Download URL'; break;
-			case self::TYPE_ACTION_NAME: return 'Page Title'; break;
-			case self::TYPE_ECOMMERCE_ITEM_SKU: return 'Ecommerce Item SKU'; break;
-			case self::TYPE_ECOMMERCE_ITEM_NAME: return 'Ecommerce Item Name'; break;
-			case self::TYPE_ECOMMERCE_ITEM_CATEGORY: return 'Ecommerce Item Category'; break;
-			default: throw new Exception("Unexpected action type ".$type); break;
-		}
-	}
-	
-	/**
-	 * Loads the idaction of the current action name and the current action url.
-	 * These idactions are used in the visitor logging table to link the visit information
-	 * (entry action, exit action) to the actions.
-	 * These idactions are also used in the table that links the visits and their actions.
-	 * 
-	 * The methods takes care of creating a new record(s) in the action table if the existing
-	 * action name and action url doesn't exist yet.
-	 */
-	function loadIdActionNameAndUrl()
-	{
-		if( $this->idActionUrl !== false 
-			&& $this->idActionName !== false )
-		{
-			return;
-		}
-		$actions = array();
-		$action = array($this->getActionName(), $this->getActionNameType());
-		if(!is_null($action[1]))
-		{
-			$actions[] = $action;
-		}
-		$action = array($this->getActionUrl(), $this->getActionType());
-		if(!is_null($action[1]))
-		{
-			$actions[] = $action;
-		}
-		$loadedActionIds = self::loadActionId($actions);
-		
-		foreach($loadedActionIds as $loadedActionId)
-		{
-			list($name, $type, $actionId) = $loadedActionId;
-			if($type == $this->getActionType())
-			{
-				$this->idActionUrl = $actionId;
-			}
-			elseif($type == $this->getActionNameType())
-			{
-				$this->idActionName = $actionId;
-			}
-		}
-	}
-	
-	/**
-	 * @param int $idSite
-	 */
-	function setIdSite($idSite)
-	{
-		$this->idSite = $idSite;
-	}
-	
-	function setTimestamp($timestamp)
-	{
-		$this->timestamp = $timestamp;
-	}
-	
-	
-	/**
-	 * Records in the DB the association between the visit and this action.
-	 * 
-	 * @param int idVisit is the ID of the current visit in the DB table log_visit
-	 * @param int idRefererActionUrl is the ID of the last action done by the current visit. 
-	 * @param int timeSpentRefererAction is the number of seconds since the last action was done. 
-	 * 				It is directly related to idRefererActionUrl.
-	 */
-	 public function record( $idVisit, $visitorIdCookie, $idRefererActionUrl, $idRefererActionName, $timeSpentRefererAction)
-	 {
-		$this->loadIdActionNameAndUrl();
-		
-		$idActionName = in_array($this->getActionType(), array(Piwik_Tracker_Action::TYPE_ACTION_NAME, Piwik_Tracker_Action::TYPE_ACTION_URL))
-							? (int)$this->getIdActionName()
-							: null;
-		$insert = array(
-			'idvisit' => $idVisit, 
-			'idsite' => $this->idSite, 
-			'idvisitor' => $visitorIdCookie, 
-			'server_time' => Piwik_Tracker::getDatetimeFromTimestamp($this->timestamp), 
-			'idaction_url' => (int)$this->getIdActionUrl(), 
-			'idaction_name' => $idActionName, 
-			'idaction_url_ref' => $idRefererActionUrl, 
-			'idaction_name_ref' => $idRefererActionName, 
-			'time_spent_ref_action' => $timeSpentRefererAction
-		);
-		$customVariables = Piwik_Tracker_Visit::getCustomVariables($scope = 'page', $this->request);
-		$insert = array_merge($insert, $customVariables);
+        $url = $request->getParam('url');
 
-		// Mysqli apparently does not like NULL inserts?
-		$insertWithoutNulls = array();
-		foreach($insert as $column => $value)
-		{
-			if(!is_null($value))
-			{
-				$insertWithoutNulls[$column] = $value;
-			}
-		}
-		
-		$fields = implode(", ", array_keys($insertWithoutNulls));
-		$bind = array_values($insertWithoutNulls);
-		$values = Piwik_Common::getSqlStringFieldsArray($insertWithoutNulls);
+        $eventCategory = $request->getParam('e_c');
+        $eventAction = $request->getParam('e_a');
+        if(strlen($eventCategory) > 0 && strlen($eventAction) > 0 ) {
+            return new ActionEvent($eventCategory, $eventAction, $url, $request);
+        }
 
-		$sql = "INSERT INTO ".Piwik_Common::prefixTable('log_link_visit_action'). " ($fields) VALUES ($values)";
-		Piwik_Tracker::getDatabase()->query( $sql, $bind ); 
-		
-		$this->idLinkVisitAction = Piwik_Tracker::getDatabase()->lastInsertId(); 
-		
-		$info = array( 
-			'idSite' => $this->idSite, 
-			'idLinkVisitAction' => $this->idLinkVisitAction, 
-			'idVisit' => $idVisit, 
-			'idRefererActionUrl' => $idRefererActionUrl, 
-			'idRefererActionName' => $idRefererActionName, 
-			'timeSpentRefererAction' => $timeSpentRefererAction, 
-		); 
-		printDebug($insertWithoutNulls);
+        $action = new ActionSiteSearch($url, $request);
+        if ($action->isSearchDetected()) {
+            return $action;
+        }
+        return new ActionPageview($url, $request);
+    }
 
-		/* 
-		* send the Action object ($this)  and the list of ids ($info) as arguments to the event 
-		*/ 
-		Piwik_PostEvent('Tracker.Action.record', $this, $info);
-	 }
-	 
-	/**
-	 * Returns the ID of the newly created record in the log_link_visit_action table
-	 *
-	 * @return int | false
-	 */
-	public function getIdLinkVisitAction()
-	{
-		return $this->idLinkVisitAction;
-	}
-	
-	 /**
-	 * Generates the name of the action from the URL or the specified name.
-	 * Sets the name as $this->actionName
-	  *
-	 * @return array
-	 */
-	protected function extractUrlAndActionNameFromRequest()
-	{
-		$actionName = null;
-		
-		// download?
-		$downloadUrl = Piwik_Common::getRequestVar( 'download', '', 'string', $this->request);
-		if(!empty($downloadUrl))
-		{
-			$actionType = self::TYPE_DOWNLOAD;
-			$url = $downloadUrl;
-		}
-		
-		// outlink?
-		if(empty($actionType))
-		{
-			$outlinkUrl = Piwik_Common::getRequestVar( 'link', '', 'string', $this->request);
-			if(!empty($outlinkUrl))
-			{
-				$actionType = self::TYPE_OUTLINK;
-				$url = $outlinkUrl;
-			}
-		}
+    /**
+     * @var Request
+     */
+    protected $request;
 
-		// handle encoding
-		$actionName = Piwik_Common::getRequestVar( 'action_name', '', 'string', $this->request);
+    private $idLinkVisitAction;
+    private $actionIdsCached = array();
+    private $actionName;
+    private $actionType;
+    private $actionUrl;
 
-		// defaults to page view 
-		if(empty($actionType))
-		{
-			$actionType = self::TYPE_ACTION_URL;
-			$url = Piwik_Common::getRequestVar( 'url', '', 'string', $this->request);
+    public function __construct($type, Request $request)
+    {
+        $this->actionType = $type;
+        $this->request = $request;
+    }
 
-			// get the delimiter, by default '/'; BC, we read the old action_category_delimiter first (see #1067) 
-			$actionCategoryDelimiter = isset(Piwik_Tracker_Config::getInstance()->General['action_category_delimiter'])
-										? Piwik_Tracker_Config::getInstance()->General['action_category_delimiter']
-										: Piwik_Tracker_Config::getInstance()->General['action_url_category_delimiter'];
-			
-			// create an array of the categories delimited by the delimiter
-			$split = explode($actionCategoryDelimiter, $actionName);
-			
-			// trim every category
-			$split = array_map('trim', $split);
-			
-			// remove empty categories
-			$split = array_filter($split, 'strlen');
-			
-			// rebuild the name from the array of cleaned categories
-			$actionName = implode($actionCategoryDelimiter, $split);
-		}
-		$url = self::cleanupString($url);
-		$actionName = self::cleanupString($actionName);
+    /**
+     * Returns URL of the page currently being tracked, or the file being downloaded, or the outlink being clicked
+     *
+     * @return string
+     */
+    public function getActionUrl()
+    {
+        return $this->actionUrl;
+    }
 
-		return array(
-			'name' => empty($actionName) ? '' : $actionName,
-			'type' => $actionType,
-			'url'  => $url,
-		);
-	}
-	
-	protected static function cleanupString($string)
-	{
-		$string = trim($string);
-		$string = str_replace(array("\n", "\r"), "", $string);
-		$limit = Piwik_Tracker_Config::getInstance()->Tracker['page_maximum_length'];
-		return substr($string, 0, $limit);
-	}
+    public function getActionName()
+    {
+        return $this->actionName;
+    }
+
+    public function getActionType()
+    {
+        return $this->actionType;
+    }
+
+    public function getCustomVariables()
+    {
+        $customVariables = $this->request->getCustomVariables($scope = 'page');
+        return $customVariables;
+    }
+
+    // custom_float column
+    public function getCustomFloatValue()
+    {
+        return false;
+    }
+
+
+    protected function setActionName($name)
+    {
+        $name = PageUrl::cleanupString((string)$name);
+        $this->actionName = $name;
+    }
+
+    protected function setActionUrl($url)
+    {
+        $urlBefore = $url;
+        $url = PageUrl::excludeQueryParametersFromUrl($url, $this->request->getIdSite());
+
+        if ($url != $urlBefore) {
+            Common::printDebug(' Before was "' . $urlBefore . '"');
+            Common::printDebug(' After is "' . $url . '"');
+        }
+
+        $url = PageUrl::getUrlIfLookValid($url);
+        $this->actionUrl = $url;
+    }
+
+    abstract protected function getActionsToLookup();
+
+    protected function getUrlAndType()
+    {
+        $url = $this->getActionUrl();
+        if (!empty($url)) {
+            // normalize urls by stripping protocol and www
+            $url = PageUrl::normalizeUrl($url);
+            return array($url['url'], Tracker\Action::TYPE_PAGE_URL, $url['prefixId']);
+        }
+        return false;
+    }
+
+    public function getIdActionUrl()
+    {
+        $idUrl = $this->actionIdsCached['idaction_url'];
+        // note; idaction_url = 0 is displayed as "Page URL Not Defined"
+        return (int)$idUrl;
+    }
+
+
+    public function getIdActionUrlForEntryAndExitIds()
+    {
+        return $this->getIdActionUrl();
+    }
+
+    public function getIdActionNameForEntryAndExitIds()
+    {
+        return $this->getIdActionName();
+    }
+
+    public function getIdActionName()
+    {
+        if(!isset($this->actionIdsCached['idaction_name'])) {
+            return false;
+        }
+        return $this->actionIdsCached['idaction_name'];
+    }
+
+    /**
+     * Returns the ID of the newly created record in the log_link_visit_action table
+     *
+     * @return int
+     */
+    public function getIdLinkVisitAction()
+    {
+        return $this->idLinkVisitAction;
+    }
+
+    public function writeDebugInfo()
+    {
+        $type = self::getTypeAsString($this->getActionType());
+        Common::printDebug("Action is a $type,
+                Action name =  " . $this->getActionName() . ",
+                Action URL = " . $this->getActionUrl());
+        return true;
+    }
+
+    public static function getTypeAsString($type)
+    {
+        $class = new \ReflectionClass("\\Piwik\\Tracker\\Action");
+        $constants = $class->getConstants();
+
+        $typeId = array_search($type, $constants);
+        if($typeId === false) {
+            throw new Exception("Unexpected action type " . $type);
+        }
+        return str_replace('TYPE_', '', $typeId);
+    }
+
+    /**
+     * Loads the idaction of the current action name and the current action url.
+     * These idactions are used in the visitor logging table to link the visit information
+     * (entry action, exit action) to the actions.
+     * These idactions are also used in the table that links the visits and their actions.
+     *
+     * The methods takes care of creating a new record(s) in the action table if the existing
+     * action name and action url doesn't exist yet.
+     */
+    public function loadIdsFromLogActionTable()
+    {
+        if(!empty($this->actionIdsCached)) {
+            return;
+        }
+        $actions = $this->getActionsToLookup();
+        $actions = array_filter($actions, 'count');
+
+        if(empty($actions)) {
+            return;
+        }
+
+        $loadedActionIds = TableLogAction::loadIdsAction($actions);
+
+        $this->actionIdsCached = $loadedActionIds;
+        return $this->actionIdsCached;
+    }
+
+    /**
+     * Records in the DB the association between the visit and this action.
+     *
+     * @param int $idVisit is the ID of the current visit in the DB table log_visit
+     * @param $visitorIdCookie
+     * @param int $idReferrerActionUrl is the ID of the last action done by the current visit.
+     * @param $idReferrerActionName
+     * @param int $timeSpentReferrerAction is the number of seconds since the last action was done.
+     *                 It is directly related to idReferrerActionUrl.
+     */
+    public function record($idVisit, $visitorIdCookie, $idReferrerActionUrl, $idReferrerActionName, $timeSpentReferrerAction)
+    {
+        $this->loadIdsFromLogActionTable();
+
+        $idActionName = in_array($this->getActionType(), array(Tracker\Action::TYPE_PAGE_TITLE,
+                                                               Tracker\Action::TYPE_PAGE_URL,
+                                                               Tracker\Action::TYPE_SITE_SEARCH
+                                                         ))
+            ? (int)$this->getIdActionName()
+            : 0;
+
+        $visitAction = array(
+            'idvisit'               => $idVisit,
+            'idsite'                => $this->request->getIdSite(),
+            'idvisitor'             => $visitorIdCookie,
+            'server_time'           => Tracker::getDatetimeFromTimestamp($this->request->getCurrentTimestamp()),
+            'idaction_url'          => $this->getIdActionUrl(),
+            'idaction_name'         => $idActionName,
+            'idaction_url_ref'      => $idReferrerActionUrl,
+            'idaction_name_ref'     => $idReferrerActionName,
+            'time_spent_ref_action' => $timeSpentReferrerAction
+        );
+
+        foreach($this->actionIdsCached as $field => $idAction) {
+            $visitAction[$field] = $idAction;
+        }
+
+        $customValue = $this->getCustomFloatValue();
+        if (!empty($customValue)) {
+            $visitAction[self::DB_COLUMN_CUSTOM_FLOAT] = $customValue;
+        }
+
+        $customVariables = $this->getCustomVariables();
+        if (!empty($customVariables)) {
+            Common::printDebug("Page level Custom Variables: ");
+            Common::printDebug($customVariables);
+        }
+
+        $visitAction = array_merge($visitAction, $customVariables);
+        $fields = implode(", ", array_keys($visitAction));
+        $bind = array_values($visitAction);
+        $values = Common::getSqlStringFieldsArray($visitAction);
+
+        $sql = "INSERT INTO " . Common::prefixTable('log_link_visit_action') . " ($fields) VALUES ($values)";
+        Tracker::getDatabase()->query($sql, $bind);
+
+        $this->idLinkVisitAction = Tracker::getDatabase()->lastInsertId();
+        $visitAction['idlink_va'] = $this->idLinkVisitAction;
+
+        Common::printDebug("Inserted new action:");
+        Common::printDebug($visitAction);
+
+        /**
+         * Triggered after successfully persisting a [visit action entity](/guides/persistence-and-the-mysql-backend#visit-actions).
+         * 
+         * @param Action $tracker Action The Action tracker instance.
+         * @param array $visitAction The visit action entity that was persisted. Read
+         *                           [this](/guides/persistence-and-the-mysql-backend#visit-actions) to see what it contains.
+         */
+        Piwik::postEvent('Tracker.recordAction', array($trackerAction = $this, $visitAction));
+    }
 }

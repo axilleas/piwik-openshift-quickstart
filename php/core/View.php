@@ -4,318 +4,362 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: View.php 4811 2011-05-26 02:17:08Z matt $
  *
- * @category Piwik
- * @package Piwik
  */
+namespace Piwik;
+
+use Exception;
+use Piwik\AssetManager\UIAssetCacheBuster;
+use Piwik\Plugins\SitesManager\API as APISitesManager;
+use Piwik\Plugins\UsersManager\API as APIUsersManager;
+use Piwik\View\ViewInterface;
+use Twig_Environment;
 
 /**
  * Transition for pre-Piwik 0.4.4
  */
-if(!defined('PIWIK_USER_PATH'))
-{
-	define('PIWIK_USER_PATH', PIWIK_INCLUDE_PATH);
+if (!defined('PIWIK_USER_PATH')) {
+    define('PIWIK_USER_PATH', PIWIK_INCLUDE_PATH);
 }
 
 /**
- * View class to render the user interface
+ * Encapsulates and manages a [Twig](http://twig.sensiolabs.org/) template.
  *
- * @package Piwik
+ * View lets you set properties that will be passed on to a Twig template.
+ * View will also set several properties that will be available in all Twig
+ * templates, including:
+ * 
+ * - **currentModule**: The value of the **module** query parameter.
+ * - **currentAction**: The value of the **action** query parameter.
+ * - **userLogin**: The current user login name.
+ * - **sites**: List of site data for every site the current user has at least
+ *              view access for.
+ * - **url**: The current URL (sanitized).
+ * - **token_auth**: The current user's token auth.
+ * - **userHasSomeAdminAccess**: True if the user has admin access to at least
+ *                               one site, false if otherwise.
+ * - **userIsSuperUser**: True if the user is the superuser, false if otherwise.
+ * - **latest_version_available**: The latest version of Piwik available.
+ * - **isWidget**: The value of the 'widget' query parameter.
+ * - **show_autocompleter**: Whether the site selector should be shown or not.
+ * - **loginModule**: The name of the currently used authentication module.
+ * - **userAlias**: The alias of the current user.
+ * 
+ * ### Template Naming Convention
+ * 
+ * Template files should be named after the controller method they are used in.
+ * If they are used in more than one controller method or are included by another
+ * template, they should describe the output they generate and be prefixed with
+ * an underscore, eg, **_dataTable.twig**.
+ * 
+ * ### Twig
+ * 
+ * Twig templates must exist in the **templates** folder in a plugin's root
+ * folder.
+ * 
+ * The following filters are available to twig templates:
+ * 
+ * - **translate**: Outputs internationalized text using a translation token, eg,
+ *                  `{{ 'General_Date'|translate }}`. sprintf parameters can be passed
+ *                  to the filter.
+ * - **urlRewriteWithParameters**: Modifies the current query string with the given
+ *                                 set of parameters, eg,
+ *                                 
+ *                                     {{ {'module':'MyPlugin', 'action':'index'} | urlRewriteWithParameters }}
+ *                                 
+ * - **sumTime**: Pretty formats an number of seconds.
+ * - **money**: Formats a numerical value as a monetary value using the currency
+ *              of the supplied site (second arg is site ID).
+ *              eg, `{{ 23|money(site.idsite)|raw }}
+ * - **truncate**: Truncates the text to certain length (determined by first arg.)
+ *                 eg, `{{ myReallyLongText|truncate(80) }}`
+ * - **implode**: Calls `implode`.
+ * - **ucwords**: Calls `ucwords`.
+ * 
+ * The following functions are available to twig templates:
+ * 
+ * - **linkTo**: Modifies the current query string with the given set of parameters,
+ *               eg `{{ linkTo({'module':'MyPlugin', 'action':'index'}) }}`.
+ * - **sparkline**: Outputs a sparkline image HTML element using the sparkline image
+ *                  src link. eg, `{{ sparkline(sparklineUrl) }}`.
+ * - **postEvent**: Posts an event that allows event observers to add text to a string
+ *                  which is outputted in the template, eg, `{{ postEvent('MyPlugin.event') }}`
+ * - **isPluginLoaded**: Returns true if the supplied plugin is loaded, false if otherwise.
+ *                       `{% if isPluginLoaded('Goals') %}...{% endif %}`
+ * 
+ * ### Examples
+ * 
+ * **Basic usage**
+ * 
+ *     // a controller method
+ *     public function myView()
+ *     {
+ *         $view = new View("@MyPlugin/myView");
+ *         $view->property1 = "a view property";
+ *         $view->property2 = "another view property";
+ *         return $view->render();
+ *     }
+ * 
+ *
+ * @api
  */
-class Piwik_View implements Piwik_iView
+class View implements ViewInterface
 {
-	// view types
-	const STANDARD = 0; // REGULAR, FULL, CLASSIC
-	const MOBILE = 1;
-	const CLI = 2;
+    private $template = '';
 
-	private $template = '';
-	private $smarty = false;
-	private $variables = array();
-	private $contentType = 'text/html; charset=utf-8';
-	private $xFrameOptions = null;
+    /**
+     * Instance
+     * @var Twig_Environment
+     */
+    private $twig;
+    protected $templateVars = array();
+    private $contentType = 'text/html; charset=utf-8';
+    private $xFrameOptions = null;
 
-	public function __construct( $templateFile, $smConf = array(), $filter = true )
-	{
-		$this->template = $templateFile;
-		$this->smarty = new Piwik_Smarty($smConf, $filter);
+    /**
+     * Constructor.
+     * 
+     * @param string $templateFile The template file to load. Must be in the following format:
+     *                             `"@MyPlugin/templateFileName"`. Note the absence of .twig
+     *                             from the end of the name.
+     */
+    public function __construct($templateFile)
+    {
+        $templateExt = '.twig';
+        if (substr($templateFile, -strlen($templateExt)) !== $templateExt) {
+            $templateFile .= $templateExt;
+        }
+        $this->template = $templateFile;
 
-		// global value accessible to all templates: the piwik base URL for the current request
-		$this->piwikUrl = Piwik_Common::sanitizeInputValue(Piwik_Url::getCurrentUrlWithoutFileName());
-		$this->currentUrlWithoutFilename = Piwik_Common::sanitizeInputValue(Piwik_Url::getCurrentUrlWithoutFileName());
-		$this->piwik_version = Piwik_Version::VERSION;
-		$this->cacheBuster = md5(Piwik_Common::getSalt() . PHP_VERSION . Piwik_Version::VERSION);
-	}
-	
-	/**
-	 * Directly assigns a variable to the view script.
-	 * VAR names may not be prefixed with '_'.
-	 *
-	 *	@param string $key The variable name.
-	 *	@param mixed $val The variable value.
-	 */
-	public function __set($key, $val)
-	{
-		$this->smarty->assign($key, $val);
-	}
+        $this->initializeTwig();
 
-	/**
-	 * Retrieves an assigned variable.
-	 * VAR names may not be prefixed with '_'.
-	 *
-	 *	@param string $key The variable name.
-	 *	@return mixed The variable value.
-	 */
-	public function __get($key)
-	{
-		return $this->smarty->get_template_vars($key);
-	}
+        $this->piwik_version = Version::VERSION;
+        $this->userLogin = Piwik::getCurrentUserLogin();
+        $this->isSuperUser = Access::getInstance()->hasSuperUserAccess();
 
-	/**
-	 * Renders the current view.
-	 *
-	 * @return string Generated template
-	 */
-	public function render()
-	{
-		try {
-			$this->currentModule = Piwik::getModule();
-			$userLogin = Piwik::getCurrentUserLogin();
-			$this->userLogin = $userLogin;
-			
-			// workaround for #1331
-			$count = method_exists('Piwik', 'getWebsitesCountToDisplay') ? Piwik::getWebsitesCountToDisplay() : 1;
+        try {
+            $this->piwikUrl = SettingsPiwik::getPiwikUrl();
+        } catch (Exception $ex) {
+            // pass (occurs when DB cannot be connected to, perhaps piwik URL cache should be stored in config file...)
+        }
+    }
 
-			$sites = Piwik_SitesManager_API::getInstance()->getSitesWithAtLeastViewAccess($count);
-			usort($sites, create_function('$site1, $site2', 'return strcasecmp($site1["name"], $site2["name"]);'));
-			$this->sites = $sites;
-			$this->url = Piwik_Common::sanitizeInputValue(Piwik_Url::getCurrentUrl());
-			$this->token_auth = Piwik::getCurrentUserTokenAuth();
-			$this->userHasSomeAdminAccess = Piwik::isUserHasSomeAdminAccess();
-			$this->userIsSuperUser = Piwik::isUserIsSuperUser();
-			$this->latest_version_available = Piwik_UpdateCheck::isNewestVersionAvailable();
-			$this->disableLink = Piwik_Common::getRequestVar('disableLink', 0, 'int');
-			$this->isWidget = Piwik_Common::getRequestVar('widget', 0, 'int');
-			if(Zend_Registry::get('config')->General->autocomplete_min_sites <= count($sites))
-			{
-				$this->show_autocompleter = true;
-			}
-			else
-			{
-				$this->show_autocompleter = false;
-			}
+    /**
+     * Returns the template filename.
+     *
+     * @return string
+     */
+    public function getTemplateFile()
+    {
+        return $this->template;
+    }
 
-			// workaround for #1331
-			$this->loginModule = method_exists('Piwik', 'getLoginPluginName') ? Piwik::getLoginPluginName() : 'Login';
-			
-			$user = Piwik_UsersManager_API::getInstance()->getUser($userLogin);
-			$this->userAlias = $user['alias'];
-			
-		} catch(Exception $e) {
-			// can fail, for example at installation (no plugin loaded yet)
-		}
-		
-		$this->totalTimeGeneration = Zend_Registry::get('timer')->getTime();
-		try {
-			$this->totalNumberOfQueries = Piwik::getQueryCount();
-		}
-		catch(Exception $e){
-			$this->totalNumberOfQueries = 0;
-		}
- 
-		// workaround for #1331
-		if(method_exists('Piwik', 'overrideCacheControlHeaders'))
-		{
-			Piwik::overrideCacheControlHeaders('no-store');
-		}
-		@header('Content-Type: '.$this->contentType);
-		if($this->xFrameOptions)
-		{
-			@header('X-Frame-Options: '.$this->xFrameOptions);
-		}
-		
-		return $this->smarty->fetch($this->template);
-	}
+    /**
+     * Returns the variables to bind to the template when rendering.
+     *
+     * @param array $override Template variable override values. Mainly useful
+     *                        when including View templates in other templates.
+     * @return array
+     */
+    public function getTemplateVars($override = array())
+    {
+        return $override + $this->templateVars;
+    }
 
-	/**
-	 * Set Content-Type field in HTTP response.
-	 * Since PHP 5.1.2, header() protects against header injection attacks.
-	 *
-	 * @param string $contentType
-	 */
-	public function setContentType( $contentType )
-	{
-		$this->contentType = $contentType;
-	}
+    /**
+     * Directly assigns a variable to the view script.
+     * Variable names may not be prefixed with '_'.
+     *
+     * @param string $key The variable name.
+     * @param mixed $val The variable value.
+     */
+    public function __set($key, $val)
+    {
+        $this->templateVars[$key] = $val;
+    }
 
-	/**
-	 * Set X-Frame-Options field in the HTTP response.
-	 *
-	 * @param string $option ('deny' or 'sameorigin')
-	 */
-	public function setXFrameOptions( $option = 'deny' )
-	{
-		if($option === 'deny' || $option === 'sameorigin')
-		{
-			$this->xFrameOptions = $option;
-		}
-	}
+    /**
+     * Retrieves an assigned variable.
+     * Variable names may not be prefixed with '_'.
+     *
+     * @param string $key The variable name.
+     * @return mixed The variable value.
+     */
+    public function &__get($key)
+    {
+        return $this->templateVars[$key];
+    }
 
-	/**
-	 * Add form to view
-	 *
-	 * @param Piwik_QuickForm2 $form
-	 */
-	public function addForm( $form )
-	{
-		if($form instanceof Piwik_QuickForm2)
-		{
-			static $registered = false;
-			if(!$registered)
-			{
-				HTML_QuickForm2_Renderer::register('smarty', 'HTML_QuickForm2_Renderer_Smarty');
-				$registered = true;
-			}
+    private function initializeTwig()
+    {
+        $piwikTwig = new Twig();
+        $this->twig = $piwikTwig->getTwigEnvironment();
+    }
 
-			// Create the renderer object
-			$renderer = HTML_QuickForm2_Renderer::factory('smarty');
-			$renderer->setOption('group_errors', true);
+    /**
+     * Renders the current view. Also sends the stored 'Content-Type' HTML header.
+     * See {@link setContentType()}.
+     *
+     * @return string Generated template.
+     */
+    public function render()
+    {
+        try {
+            $this->currentModule = Piwik::getModule();
+            $this->currentAction = Piwik::getAction();
 
-			// build the HTML for the form
-			$form->render($renderer);
+            $this->url = Common::sanitizeInputValue(Url::getCurrentUrl());
+            $this->token_auth = Piwik::getCurrentUserTokenAuth();
+            $this->userHasSomeAdminAccess = Piwik::isUserHasSomeAdminAccess();
+            $this->userIsSuperUser = Piwik::hasUserSuperUserAccess();
+            $this->latest_version_available = UpdateCheck::isNewestVersionAvailable();
+            $this->disableLink = Common::getRequestVar('disableLink', 0, 'int');
+            $this->isWidget = Common::getRequestVar('widget', 0, 'int');
+            $this->cacheBuster = UIAssetCacheBuster::getInstance()->piwikVersionBasedCacheBuster();
 
-			// assign array with form data
-			$this->smarty->assign('form_data', $renderer->toArray());
-			$this->smarty->assign('element_list', $form->getElementList());
-		}
-	}
+            $this->loginModule = Piwik::getLoginPluginName();
 
-	/**
-	 * Assign value to a variable for use in Smarty template
-	 *
-	 * @param string|array $var
-	 * @param mixed $value
-	 */
-	public function assign($var, $value=null)
-	{
-		if (is_string($var))
-		{
-			$this->smarty->assign($var, $value);
-		}
-		elseif (is_array($var))
-		{
-			foreach ($var as $key => $value)
-			{
-				$this->smarty->assign($key, $value);
-			}
-		}
-	}
+            $user = APIUsersManager::getInstance()->getUser($this->userLogin);
+            $this->userAlias = $user['alias'];
+        } catch (Exception $e) {
+            // can fail, for example at installation (no plugin loaded yet)
+        }
 
-	/**
-	 * Clear compiled Smarty templates
-	 */
-	static public function clearCompiledTemplates()
-	{
-		$view = new Piwik_View(null);
-		$view->smarty->clear_compiled_tpl();
-	}
+        try {
+            $this->totalTimeGeneration = Registry::get('timer')->getTime();
+            $this->totalNumberOfQueries = Profiler::getQueryCount();
+        } catch (Exception $e) {
+            $this->totalNumberOfQueries = 0;
+        }
 
-/*
-	public function isCached($template)
-	{
-		if ($this->smarty->is_cached($template))
-		{
-			return true;
-		}
-		return false;
-	}
-	public function setCaching($caching)
-	{
-		$this->smarty->caching = $caching;
-	}
-*/
-	
-	/**
-	 * Render the single report template
-	 */
-	static public function singleReport($title, $reportHtml, $fetch = false)
-	{
-		$view = new Piwik_View('CoreHome/templates/single_report.tpl');
-		$view->title = $title;
-		$view->report = $reportHtml;
-		
-		if ($fetch)
-		{
-			return $view->render();
-		}
-		echo $view->render();
-	}
+        ProxyHttp::overrideCacheControlHeaders('no-store');
 
-	/**
-	 * View factory method
-	 *
-	 * @param string $templateName Template name (e.g., 'index')
-	 * @param int $viewType     View type (e.g., Piwik_View::CLI)
-	 */
-	static public function factory( $templateName = null, $viewType = null)
-	{
-		Piwik_PostEvent('View.getViewType', $viewType);
+        @header('Content-Type: ' . $this->contentType);
+        // always sending this header, sometimes empty, to ensure that Dashboard embed loads (which could call this header() multiple times, the last one will prevail)
+        @header('X-Frame-Options: ' . (string)$this->xFrameOptions);
 
-		// get caller
-		$bt = @debug_backtrace();
-		if($bt === null || !isset($bt[0]))
-		{
-			throw new Exception("View factory cannot be invoked");
-		}
-		$path = dirname($bt[0]['file']);
+        return $this->renderTwigTemplate();
+    }
 
-		// determine best view type
-		if($viewType === null)
-		{
-			if(Piwik_Common::isPhpCliMode())
-			{
-				$viewType = self::CLI;
-			}
-			else
-			{
-				$viewType = self::STANDARD;
-			}
-		}
+    protected function renderTwigTemplate()
+    {
+        $output = $this->twig->render($this->getTemplateFile(), $this->getTemplateVars());
+        $output = $this->applyFilter_cacheBuster($output);
 
-		// get template filename
-		if($viewType == self::CLI)
-		{
-			$templateFile = $path.'/templates/cli_'.$templateName.'.tpl';
-			if(file_exists($templateFile))
-			{
-				return new Piwik_View($templateFile, array(), false);
-			}
+        $helper = new Theme;
+        $output = $helper->rewriteAssetsPathToTheme($output);
+        return $output;
+    }
 
-			$viewType = self::STANDARD;
-		}
+    protected function applyFilter_cacheBuster($output)
+    {
+        $cacheBuster = UIAssetCacheBuster::getInstance()->piwikVersionBasedCacheBuster();
+        $tag = 'cb=' . $cacheBuster;
 
-		if($viewType == self::MOBILE)
-		{
-			$templateFile = $path.'/templates/mobile_'.$templateName.'.tpl';
-			if(!file_exists($templateFile))
-			{
-				$viewType = self::STANDARD;
-			}
-		}
+        $pattern = array(
+            '~<script type=[\'"]text/javascript[\'"] src=[\'"]([^\'"]+)[\'"]>~',
+            '~<script src=[\'"]([^\'"]+)[\'"] type=[\'"]text/javascript[\'"]>~',
+            '~<link rel=[\'"]stylesheet[\'"] type=[\'"]text/css[\'"] href=[\'"]([^\'"]+)[\'"] ?/?>~',
+            // removes the double ?cb= tag
+            '~(src|href)=\"index.php\?module=([A-Za-z0-9_]+)&action=([A-Za-z0-9_]+)\?cb=~',
+        );
 
-		if($viewType != self::MOBILE)
-		{
-			$templateFile = $path.'/templates/'.$templateName.'.tpl';
-		}
-		
-		// Specified template not found
-		// We allow for no specified template
-		if(!empty($templateName)
-			&& !file_exists($templateFile))
-		{
-			throw new Exception('Template not found: '.$templateFile);
-		}
-		return new Piwik_View($templateFile);
-	}
+        $replace = array(
+            '<script type="text/javascript" src="$1?' . $tag . '">',
+            '<script type="text/javascript" src="$1?' . $tag . '">',
+            '<link rel="stylesheet" type="text/css" href="$1?' . $tag . '" />',
+            '$1="index.php?module=$2&amp;action=$3&amp;cb=',
+        );
+
+        return preg_replace($pattern, $replace, $output);
+    }
+
+    /**
+     * Set stored value used in the Content-Type HTTP header field. The header is
+     * set just before rendering.
+     * 
+     * @param string $contentType
+     */
+    public function setContentType($contentType)
+    {
+        $this->contentType = $contentType;
+    }
+
+    /**
+     * Set X-Frame-Options field in the HTTP response. The header is set just
+     * before rendering.
+     * 
+     * _Note: setting this allows you to make sure the View **cannot** be
+     * embedded in iframes. Learn more [here](https://developer.mozilla.org/en-US/docs/HTTP/X-Frame-Options)._
+     *
+     * @param string $option ('deny' or 'sameorigin')
+     */
+    public function setXFrameOptions($option = 'deny')
+    {
+        if ($option === 'deny' || $option === 'sameorigin') {
+            $this->xFrameOptions = $option;
+        }
+        if ($option == 'allow') {
+            $this->xFrameOptions = null;
+        }
+    }
+
+    /**
+     * Add form to view
+     *
+     * @param QuickForm2 $form
+     * @ignore
+     */
+    public function addForm(QuickForm2 $form)
+    {
+
+        // assign array with form data
+        $this->assign('form_data', $form->getFormData());
+        $this->assign('element_list', $form->getElementList());
+    }
+
+    /**
+     * Assign value to a variable for use in a template
+     * @param string|array $var
+     * @param mixed $value
+     * @ignore
+     */
+    public function assign($var, $value = null)
+    {
+        if (is_string($var)) {
+            $this->$var = $value;
+        } elseif (is_array($var)) {
+            foreach ($var as $key => $value) {
+                $this->$key = $value;
+            }
+        }
+    }
+
+    /**
+     * Clear compiled Twig templates
+     * @ignore
+     */
+    static public function clearCompiledTemplates()
+    {
+        $twig = new Twig();
+        $twig->getTwigEnvironment()->clearTemplateCache();
+    }
+
+    /**
+     * Creates a View for and then renders the single report template.
+     * 
+     * Can be used for pages that display only one report to avoid having to create
+     * a new template.
+     *
+     * @param string $title The report title.
+     * @param string $reportHtml The report body HTML.
+     * @return string|void The report contents if `$fetch` is true.
+     */
+    static public function singleReport($title, $reportHtml)
+    {
+        $view = new View('@CoreHome/_singleReport');
+        $view->title = $title;
+        $view->report = $reportHtml;
+        return $view->render();
+    }
 }

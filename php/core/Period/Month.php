@@ -1,58 +1,74 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
+ *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Month.php 2968 2010-08-20 15:26:33Z vipsoft $
- * 
- * @category Piwik
- * @package Piwik
+ *
  */
+namespace Piwik\Period;
+
+use Piwik\Period;
+use Piwik\Piwik;
 
 /**
- * @package Piwik
- * @subpackage Piwik_Period
  */
-class Piwik_Period_Month extends Piwik_Period
+class Month extends Period
 {
-	protected $label = 'month';
+    protected $label = 'month';
 
-	public function getLocalizedShortString()
-	{
-		//"Aug 09"
-		$out = $this->getDateStart()->getLocalized("%shortMonth% %longYear%");
-		return $out;
-	}
+    /**
+     * Returns the current period as a localized short string
+     *
+     * @return string
+     */
+    public function getLocalizedShortString()
+    {
+        //"Aug 09"
+        $out = $this->getDateStart()->getLocalized(Piwik::translate('CoreHome_ShortMonthFormat'));
+        return $out;
+    }
 
-	public function getLocalizedLongString()
-	{
-		//"August 2009"
-		$out = $this->getDateStart()->getLocalized("%longMonth% %longYear%");
-		return $out;
-	}
-	public function getPrettyString()
-	{
-		$out = $this->getDateStart()->toString('Y-m');
-		return $out;
-	}
-	
-	protected function generate()
-	{
-		if($this->subperiodsProcessed)
-		{
-			return;
-		}
-		parent::generate();
-		
-		$date = $this->date;
-		
-		$startMonth = $date->setDay(1);
-		$currentDay = clone $startMonth;
-		while($currentDay->compareMonth($startMonth) == 0)
-		{
-			$this->addSubperiod(new Piwik_Period_Day($currentDay));
-			$currentDay = $currentDay->addDay(1);
-		}
-	}
+    /**
+     * Returns the current period as a localized long string
+     *
+     * @return string
+     */
+    public function getLocalizedLongString()
+    {
+        //"August 2009"
+        $out = $this->getDateStart()->getLocalized(Piwik::translate('CoreHome_LongMonthFormat'));
+        return $out;
+    }
+
+    /**
+     * Returns the current period as a string
+     *
+     * @return string
+     */
+    public function getPrettyString()
+    {
+        $out = $this->getDateStart()->toString('Y-m');
+        return $out;
+    }
+
+    /**
+     * Generates the subperiods (one for each day in the month)
+     */
+    protected function generate()
+    {
+        if ($this->subperiodsProcessed) {
+            return;
+        }
+        parent::generate();
+
+        $date = $this->date;
+
+        $startMonth = $date->setDay(1);
+        $currentDay = clone $startMonth;
+        while ($currentDay->compareMonth($startMonth) == 0) {
+            $this->addSubperiod(new Day($currentDay));
+            $currentDay = $currentDay->addDay(1);
+        }
+    }
 }

@@ -4,138 +4,151 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Login.php 4406 2011-04-11 16:17:23Z vipsoft $
  *
- * @category Piwik_Plugins
- * @package Piwik_Login
  */
+namespace Piwik\Plugins\Login;
+
+use Exception;
+use Piwik\Config;
+use Piwik\Cookie;
+use Piwik\FrontController;
+use Piwik\Option;
+use Piwik\Piwik;
+use Piwik\Plugins\UsersManager\UsersManager;
+use Piwik\Session;
 
 /**
  *
- * @package Piwik_Login
  */
-class Piwik_Login extends Piwik_Plugin
+class Login extends \Piwik\Plugin
 {
-	public function getInformation()
-	{
-		$info = array(
-			'description' => Piwik_Translate('Login_PluginDescription'),
-			'author' => 'Piwik',
-			'author_homepage' => 'http://piwik.org/',
-			'version' => Piwik_Version::VERSION,
-		);
-		return $info;
-	}
+    /**
+     * @see Piwik\Plugin::getListHooksRegistered
+     */
+    public function getListHooksRegistered()
+    {
+        $hooks = array(
+            'Request.initAuthenticationObject' => 'initAuthenticationObject',
+            'User.isNotAuthorized'             => 'noAccess',
+            'API.Request.authenticate'         => 'ApiRequestAuthenticate',
+            'AssetManager.getJavaScriptFiles'  => 'getJsFiles'
+        );
+        return $hooks;
+    }
 
-	function getListHooksRegistered()
-	{
-		$hooks = array(
-			'FrontController.initAuthenticationObject'	=> 'initAuthenticationObject',
-			'FrontController.NoAccessException'		=> 'noAccess',
-			'API.Request.authenticate' => 'ApiRequestAuthenticate',
-			'Login.initSession' => 'initSession',
-		);
-		return $hooks;
-	}
+    public function getJsFiles(&$jsFiles)
+    {
+        $jsFiles[] = "plugins/Login/javascripts/login.js";
+    }
 
-	/**
-	 * Redirects to Login form with error message.
-	 * Listens to FrontController.NoAccessException hook.
-	 *
-	 * @param Piwik_Event_Notification $notification
-	 */
-	function noAccess( $notification )
-	{
-		$exception  = $notification->getNotificationObject();
-		$exceptionMessage = $exception->getMessage();
+    /**
+     * Redirects to Login form with error message.
+     * Listens to User.isNotAuthorized hook.
+     */
+    public function noAccess(Exception $exception)
+    {
+        $exceptionMessage = $exception->getMessage();
 
-		$controller = new Piwik_Login_Controller();
-		$controller->login($exceptionMessage);
-	}
+        echo FrontController::getInstance()->dispatch('Login', 'login', array($exceptionMessage));
+    }
 
-	/**
-	 * Set login name and autehntication token for authentication request.
-	 * Listens to API.Request.authenticate hook.
-	 *
-	 * @param Piwik_Event_Notification $notification
-	 */
-	function ApiRequestAuthenticate($notification)
-	{
-		$tokenAuth = $notification->getNotificationObject();
-		Zend_Registry::get('auth')->setLogin($login = null);
-		Zend_Registry::get('auth')->setTokenAuth($tokenAuth);
-	}
+    /**
+     * Set login name and authentication token for API request.
+     * Listens to API.Request.authenticate hook.
+     */
+    public function ApiRequestAuthenticate($tokenAuth)
+    {
+        \Piwik\Registry::get('auth')->setLogin($login = null);
+        \Piwik\Registry::get('auth')->setTokenAuth($tokenAuth);
+    }
 
-	/**
-	 * Initializes the authentication object.
-	 * Listens to FrontController.initAuthenticationObject hook.
-	 *
-	 * @param Piwik_Event_Notification $notification
-	 */
-	function initAuthenticationObject($notification)
-	{
-		$auth = new Piwik_Login_Auth();
-		Zend_Registry::set('auth', $auth);
+    static protected function isModuleIsAPI()
+    {
+        return Piwik::getModule() === 'API'
+                && (Piwik::getAction() == '' || Piwik::getAction() == 'index');
+    }
 
-		$action = Piwik::getAction();
-		if(Piwik::getModule() === 'API'
-			&& (empty($action) || $action == 'index'))
-		{
-			return;
-		}
+    /**
+     * Initializes the authentication object.
+     * Listens to Request.initAuthenticationObject hook.
+     */
+    function initAuthenticationObject($activateCookieAuth = false)
+    {
+        $auth = new Auth();
+        \Piwik\Registry::set('auth', $auth);
 
-		$authCookieName = Zend_Registry::get('config')->General->login_cookie_name;
-		$authCookieExpiry = 0;
-		$authCookiePath = Zend_Registry::get('config')->General->login_cookie_path;
-		$authCookie = new Piwik_Cookie($authCookieName, $authCookieExpiry, $authCookiePath);
-		$defaultLogin = 'anonymous';
-		$defaultTokenAuth = 'anonymous';
-		if($authCookie->isCookieFound())
-		{
-			$defaultLogin = $authCookie->get('login');
-			$defaultTokenAuth = $authCookie->get('token_auth');
-		}
-		$auth->setLogin($defaultLogin);
-		$auth->setTokenAuth($defaultTokenAuth);
-	}
-	
-	/**
-	 * Authenticate user and initializes the session.
-	 * Listens to Login.initSession hook.
-	 *
-	 * @param Piwik_Event_Notification $notification
-	 */
-	function initSession($notification)
-	{
-		$info = $notification->getNotificationObject();
-		$login = $info['login'];
-		$md5Password = $info['md5Password'];
-		$rememberMe = $info['rememberMe'];
-		
-		$tokenAuth = Piwik_UsersManager_API::getInstance()->getTokenAuth($login, $md5Password);
+        $this->initAuthenticationFromCookie($auth, $activateCookieAuth);
+    }
 
-		$auth = Zend_Registry::get('auth');
-		$auth->setLogin($login);
-		$auth->setTokenAuth($tokenAuth);
-		$authResult = $auth->authenticate();
+    /**
+     * @param $auth
+     */
+    public static function initAuthenticationFromCookie(\Piwik\Auth $auth, $activateCookieAuth)
+    {
+        if(self::isModuleIsAPI() && !$activateCookieAuth) {
+            return;
+        }
 
-		$authCookieName = Zend_Registry::get('config')->General->login_cookie_name;
-		$authCookieExpiry = $rememberMe ? time() + Zend_Registry::get('config')->General->login_cookie_expire : 0;
-		$authCookiePath = Zend_Registry::get('config')->General->login_cookie_path;
-		$cookie = new Piwik_Cookie($authCookieName, $authCookieExpiry, $authCookiePath);
-		if(!$authResult->isValid())
+        $authCookieName = Config::getInstance()->General['login_cookie_name'];
+        $authCookieExpiry = 0;
+        $authCookiePath = Config::getInstance()->General['login_cookie_path'];
+        $authCookie = new Cookie($authCookieName, $authCookieExpiry, $authCookiePath);
+        $defaultLogin = 'anonymous';
+        $defaultTokenAuth = 'anonymous';
+        if ($authCookie->isCookieFound()) {
+            $defaultLogin = $authCookie->get('login');
+            $defaultTokenAuth = $authCookie->get('token_auth');
+        }
+        $auth->setLogin($defaultLogin);
+        $auth->setTokenAuth($defaultTokenAuth);
+    }
 
-		{
-			$cookie->delete();
-			throw new Exception(Piwik_Translate('Login_LoginPasswordNotCorrect'));
-		}
+    /**
+     * Stores password reset info for a specific login.
+     *
+     * @param string $login The user login for whom a password change was requested.
+     * @param string $password The new password to set.
+     */
+    public static function savePasswordResetInfo($login, $password)
+    {
+        $optionName = self::getPasswordResetInfoOptionName($login);
+        $optionData = UsersManager::getPasswordHash($password);
 
-		$cookie->set('login', $login);
-		$cookie->set('token_auth', $auth->getHashTokenAuth($login, $authResult->getTokenAuth()));
-		$cookie->setSecure(Piwik::isHttps());
-		$cookie->setHttpOnly(true);
-		$cookie->save();
+        Option::set($optionName, $optionData);
+    }
 
-		@Piwik_Session::regenerateId();
-	}
+    /**
+     * Removes stored password reset info if it exists.
+     *
+     * @param string $login The user login to check for.
+     */
+    public static function removePasswordResetInfo($login)
+    {
+        $optionName = self::getPasswordResetInfoOptionName($login);
+        Option::delete($optionName);
+    }
+
+    /**
+     * Gets password hash stored in password reset info.
+     *
+     * @param string $login The user login to check for.
+     * @return string|false The hashed password or false if no reset info exists.
+     */
+    public static function getPasswordToResetTo($login)
+    {
+        $optionName = self::getPasswordResetInfoOptionName($login);
+        return Option::get($optionName);
+    }
+
+    /**
+     * Gets the option name for the option that will store a user's password change
+     * request.
+     *
+     * @param string $login The user login for whom a password change was requested.
+     * @return string
+     */
+    public static function getPasswordResetInfoOptionName($login)
+    {
+        return $login . '_reset_password_info';
+    }
 }

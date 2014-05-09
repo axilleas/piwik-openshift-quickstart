@@ -4,481 +4,751 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Http.php 4842 2011-05-31 00:03:24Z matt $
  *
- * @category Piwik
- * @package Piwik
  */
+namespace Piwik;
+
+use Exception;
 
 /**
- * Server-side http client to retrieve content from remote servers, and optionally save to a local file.
+ * Contains HTTP client related helper methods that can retrieve content from remote servers
+ * and optionally save to a local file.
+ * 
  * Used to check for the latest Piwik version and download updates.
  *
- * @package Piwik
  */
-class Piwik_Http
+class Http
 {
-	/**
-	 * Get "best" available transport method for sendHttpRequest() calls.
-	 *
-	 * @return string
-	 */
-	static public function getTransportMethod()
-	{
-		$method = 'curl';
-		if(!extension_loaded('curl'))
-		{
-			$method = 'fopen';
-			if(@ini_get('allow_url_fopen') != '1')
-			{
-				$method = 'socket';
-				if(!function_exists('fsockopen'))
-				{
-					return null;
-				}
-			}
-		}
-		return $method;
-	}
+    /**
+     * Returns the "best" available transport method for {@link sendHttpRequest()} calls.
+     * 
+     * @return string Either `'curl'`, `'fopen'` or `'socket'`.
+     * @api
+     */
+    public static function getTransportMethod()
+    {
+        $method = 'curl';
+        if (!self::isCurlEnabled()) {
+            $method = 'fopen';
+            if (@ini_get('allow_url_fopen') != '1') {
+                $method = 'socket';
+                if (!self::isSocketEnabled()) {
+                    return null;
+                }
+            }
+        }
+        return $method;
+    }
 
-	/**
-	 * Sends http request ensuring the request will fail before $timeout seconds
-	 *
-	 * If no $destinationPath is specified, the trimmed response (without header) is returned as a string.
-	 * If a $destinationPath is specified, the response (without header) is saved to a file.
-	 *
-	 * @param string $aUrl
-	 * @param int $timeout
-	 * @param string $userAgent
-	 * @param string $destinationPath
-	 * @param int $followDepth
-	 * @return bool true (or string) on success; false on HTTP response error code (1xx or 4xx)
-	 * @throws Exception for all other errors
-	 */
-	static public function sendHttpRequest($aUrl, $timeout, $userAgent = null, $destinationPath = null, $followDepth = 0, $acceptLanguage = false)
-	{
-		// create output file
-		$file = null;
-		if($destinationPath)
-		{
-			// Ensure destination directory exists 
-			Piwik_Common::mkdir(dirname($destinationPath));
-			if (($file = @fopen($destinationPath, 'wb')) === false || !is_resource($file))
-			{
-				throw new Exception('Error while creating the file: ' . $destinationPath);
-			}
-		}
+    protected static function isSocketEnabled()
+    {
+        return function_exists('fsockopen');
+    }
 
-		return self::sendHttpRequestBy(self::getTransportMethod(), $aUrl, $timeout, $userAgent, $destinationPath, $file, $followDepth, $acceptLanguage); 			
-	}
+    protected static function isCurlEnabled()
+    {
+        return function_exists('curl_init');
+    }
 
-	/**
-	 * Sends http request using the specified transport method
-	 *
-	 * @param string $method
-	 * @param string $aUrl
-	 * @param int $timeout
-	 * @param string $userAgent
-	 * @param string $destinationPath
-	 * @param resource $file
-	 * @param int $followDepth
-	 * @return bool true (or string) on success; false on HTTP response error code (1xx or 4xx)
-	 * @throws Exception for all other errors
-	 */
-	static public function sendHttpRequestBy($method = 'socket', $aUrl, $timeout, $userAgent = null, $destinationPath = null, $file = null, $followDepth = 0, $acceptLanguage = false)
-	{
-		if ($followDepth > 5)
-		{
-			throw new Exception('Too many redirects ('.$followDepth.')');
-		}
+    /**
+     * Sends an HTTP request using best available transport method.
+     *
+     * @param string $aUrl The target URL.
+     * @param int $timeout The number of seconds to wait before aborting the HTTP request.
+     * @param string|null $userAgent The user agent to use.
+     * @param string|null $destinationPath If supplied, the HTTP response will be saved to the file specified by
+     *                                     this path.
+     * @param int|null $followDepth Internal redirect count. Should always pass `null` for this parameter.
+     * @param bool $acceptLanguage The value to use for the `'Accept-Language'` HTTP request header.
+     * @param array|bool $byteRange For `Range:` header. Should be two element array of bytes, eg, `array(0, 1024)`
+     *                              Doesn't work w/ `fopen` transport method.
+     * @param bool $getExtendedInfo If true returns the status code, headers & response, if false just the response.
+     * @param string $httpMethod The HTTP method to use. Defaults to `'GET'`.
+     * @throws Exception if the response cannot be saved to `$destinationPath`, if the HTTP response cannot be sent,
+     *                   if there are more than 5 redirects or if the request times out.
+     * @return bool|string If `$destinationPath` is not specified the HTTP response is returned on success. `false`
+     *                     is returned on failure.
+     *                     If `$getExtendedInfo` is `true` and `$destinationPath` is not specified an array with
+     *                     the following information is returned on success:
+     * 
+     *                     - **status**: the HTTP status code
+     *                     - **headers**: the HTTP headers
+     *                     - **data**: the HTTP response data
+     * 
+     *                     `false` is still returned on failure.
+     * @api
+     */
+    public static function sendHttpRequest($aUrl, $timeout, $userAgent = null, $destinationPath = null, $followDepth = 0, $acceptLanguage = false, $byteRange = false, $getExtendedInfo = false, $httpMethod = 'GET')
+    {
+        // create output file
+        $file = null;
+        if ($destinationPath) {
+            // Ensure destination directory exists
+            Filesystem::mkdir(dirname($destinationPath));
+            if (($file = @fopen($destinationPath, 'wb')) === false || !is_resource($file)) {
+                throw new Exception('Error while creating the file: ' . $destinationPath);
+            }
+        }
 
-		$strlen = function_exists('mb_orig_strlen') ? 'mb_orig_strlen' : 'strlen';
-		$contentLength = 0;
-		$fileLength = 0;
+        $acceptLanguage = $acceptLanguage ? 'Accept-Language: ' . $acceptLanguage : '';
+        return self::sendHttpRequestBy(self::getTransportMethod(), $aUrl, $timeout, $userAgent, $destinationPath, $file, $followDepth, $acceptLanguage, $acceptInvalidSslCertificate = false, $byteRange, $getExtendedInfo, $httpMethod);
+    }
 
-		// Piwik services behave like a proxy, so we should act like one.
-		$xff = 'X-Forwarded-For: '
-			. (isset($_SERVER['HTTP_X_FORWARDED_FOR']) && !empty($_SERVER['HTTP_X_FORWARDED_FOR']) ? $_SERVER['HTTP_X_FORWARDED_FOR'] . ',' : '')
-			. Piwik_IP::getIpFromHeader();
-		$via = 'Via: '
-			. (isset($_SERVER['HTTP_VIA']) && !empty($_SERVER['HTTP_VIA']) ? $_SERVER['HTTP_VIA'] . ', ' : '')
-			. Piwik_Version::VERSION . ' Piwik'
-			. ($userAgent ? " ($userAgent)" : '');
-		$acceptLanguage = $acceptLanguage ? 'Accept-Language:'.$acceptLanguage : '';
-		$userAgent = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : 'Piwik/'.Piwik_Version::VERSION;
+    /**
+     * Sends an HTTP request using the specified transport method.
+     *
+     * @param string $method
+     * @param string $aUrl
+     * @param int $timeout
+     * @param string $userAgent
+     * @param string $destinationPath
+     * @param resource $file
+     * @param int $followDepth
+     * @param bool|string $acceptLanguage Accept-language header
+     * @param bool $acceptInvalidSslCertificate Only used with $method == 'curl'. If set to true (NOT recommended!) the SSL certificate will not be checked
+     * @param array|bool $byteRange For Range: header. Should be two element array of bytes, eg, array(0, 1024)
+     *                                                  Doesn't work w/ fopen method.
+     * @param bool $getExtendedInfo True to return status code, headers & response, false if just response.
+     * @param string $httpMethod The HTTP method to use. Defaults to `'GET'`.
+     *
+     * @throws Exception
+     * @return bool  true (or string/array) on success; false on HTTP response error code (1xx or 4xx)
+     */
+    public static function sendHttpRequestBy(
+        $method = 'socket',
+        $aUrl,
+        $timeout,
+        $userAgent = null,
+        $destinationPath = null,
+        $file = null,
+        $followDepth = 0,
+        $acceptLanguage = false,
+        $acceptInvalidSslCertificate = false,
+        $byteRange = false,
+        $getExtendedInfo = false,
+        $httpMethod = 'GET'
+    )
+    {
+        if ($followDepth > 5) {
+            throw new Exception('Too many redirects (' . $followDepth . ')');
+        }
 
-		// proxy configuration
-		if(!empty($GLOBALS['PIWIK_TRACKER_MODE']))
-		{
-			$proxyHost = Piwik_Tracker_Config::getInstance()->proxy['host'];
-			$proxyPort = Piwik_Tracker_Config::getInstance()->proxy['port'];
-			$proxyUser = Piwik_Tracker_Config::getInstance()->proxy['username'];
-			$proxyPassword = Piwik_Tracker_Config::getInstance()->proxy['password'];
-		}
-		else
-		{
-			$config = Zend_Registry::get('config');
-			if($config !== false)
-			{
-				$proxyHost = $config->proxy->host;
-				$proxyPort = $config->proxy->port;
-				$proxyUser = $config->proxy->username;
-				$proxyPassword = $config->proxy->password;
-			}
-		}
+        $contentLength = 0;
+        $fileLength = 0;
 
-		if($method == 'socket')
-		{
-			// initialization
-			$url = @parse_url($aUrl);
-			if($url === false || !isset($url['scheme']))
-			{
-				throw new Exception('Malformed URL: '.$aUrl);
-			}
+        // Piwik services behave like a proxy, so we should act like one.
+        $xff = 'X-Forwarded-For: '
+            . (isset($_SERVER['HTTP_X_FORWARDED_FOR']) && !empty($_SERVER['HTTP_X_FORWARDED_FOR']) ? $_SERVER['HTTP_X_FORWARDED_FOR'] . ',' : '')
+            . IP::getIpFromHeader();
 
-			if($url['scheme'] != 'http')
-			{
-				throw new Exception('Invalid protocol/scheme: '.$url['scheme']);
-			}
-			$host = $url['host'];
-			$port = isset($url['port)']) ? $url['port'] : 80;
-			$path = isset($url['path']) ? $url['path'] : '/';
-			if(isset($url['query']))
-			{
-				$path .= '?'.$url['query'];
-			}
-			$errno = null;
-			$errstr = null;
+        if (empty($userAgent)) {
+            $userAgent = self::getUserAgent();
+        }
 
-			$proxyAuth = null;
-			if(!empty($proxyHost) && !empty($proxyPort))
-			{
-				$connectHost = $proxyHost;
-				$connectPort = $proxyPort;
-				if(!empty($proxyUser) && !empty($proxyPassword))
-				{
-					$proxyAuth = 'Proxy-Authorization: Basic '.base64_encode("$proxyUser:$proxyPassword") ."\r\n";
-				}
-				$requestHeader = "GET $aUrl HTTP/1.1\r\n";
-			}
-			else
-			{
-				$connectHost = $host;
-				$connectPort = $port;
-				$requestHeader = "GET $path HTTP/1.0\r\n";
-			}
+        $via = 'Via: '
+            . (isset($_SERVER['HTTP_VIA']) && !empty($_SERVER['HTTP_VIA']) ? $_SERVER['HTTP_VIA'] . ', ' : '')
+            . Version::VERSION . ' '
+            . ($userAgent ? " ($userAgent)" : '');
 
-			// connection attempt
-			if (($fsock = @fsockopen($connectHost, $connectPort, $errno, $errstr, $timeout)) === false || !is_resource($fsock))
-			{
-				if(is_resource($file)) { @fclose($file); }
-				throw new Exception("Error while connecting to: $host. Please try again later. $errstr");
-			}
+        // range header
+        $rangeHeader = '';
+        if (!empty($byteRange)) {
+            $rangeHeader = 'Range: bytes=' . $byteRange[0] . '-' . $byteRange[1] . "\r\n";
+        }
 
-			// send HTTP request header
-			$requestHeader .=
-				"Host: $host".($port != 80 ? ':'.$port : '')."\r\n"
-				.($proxyAuth ? $proxyAuth : '')
-				.'User-Agent: '.$userAgent."\r\n"
-				. ($acceptLanguage ? $acceptLanguage ."\r\n" : '') 
-				.$xff."\r\n"
-				.$via."\r\n"
-				."Connection: close\r\n"
-				."\r\n";
-			fwrite($fsock, $requestHeader);
+        // proxy configuration
+        $proxyHost = Config::getInstance()->proxy['host'];
+        $proxyPort = Config::getInstance()->proxy['port'];
+        $proxyUser = Config::getInstance()->proxy['username'];
+        $proxyPassword = Config::getInstance()->proxy['password'];
 
-			$streamMetaData = array('timed_out' => false);
-			@stream_set_blocking($fsock, true);
-			@stream_set_timeout($fsock, $timeout);
+        // other result data
+        $status = null;
+        $headers = array();
 
-			// process header
-			$status = null;
-			$expectRedirect = false;
+        if ($method == 'socket') {
+            if (!self::isSocketEnabled()) {
+                // can be triggered in tests
+                throw new Exception("HTTP socket support is not enabled (php function fsockopen is not available) ");
+            }
+            // initialization
+            $url = @parse_url($aUrl);
+            if ($url === false || !isset($url['scheme'])) {
+                throw new Exception('Malformed URL: ' . $aUrl);
+            }
 
-			while(!feof($fsock))
-			{
-				$line = fgets($fsock, 4096);
+            if ($url['scheme'] != 'http') {
+                throw new Exception('Invalid protocol/scheme: ' . $url['scheme']);
+            }
+            $host = $url['host'];
+            $port = isset($url['port)']) ? $url['port'] : 80;
+            $path = isset($url['path']) ? $url['path'] : '/';
+            if (isset($url['query'])) {
+                $path .= '?' . $url['query'];
+            }
+            $errno = null;
+            $errstr = null;
 
-				$streamMetaData = @stream_get_meta_data($fsock);
-				if($streamMetaData['timed_out'])
-				{
-					if(is_resource($file)) { @fclose($file); }
-					@fclose($fsock);
-					throw new Exception('Timed out waiting for server response');
-				}
+            if ((!empty($proxyHost) && !empty($proxyPort))
+                || !empty($byteRange)
+            ) {
+                $httpVer = '1.1';
+            } else {
+                $httpVer = '1.0';
+            }
 
-				// a blank line marks the end of the server response header
-				if(rtrim($line, "\r\n") == '')
-				{
-					break;
-				}
+            $proxyAuth = null;
+            if (!empty($proxyHost) && !empty($proxyPort)) {
+                $connectHost = $proxyHost;
+                $connectPort = $proxyPort;
+                if (!empty($proxyUser) && !empty($proxyPassword)) {
+                    $proxyAuth = 'Proxy-Authorization: Basic ' . base64_encode("$proxyUser:$proxyPassword") . "\r\n";
+                }
+                $requestHeader = "$httpMethod $aUrl HTTP/$httpVer\r\n";
+            } else {
+                $connectHost = $host;
+                $connectPort = $port;
+                $requestHeader = "$httpMethod $path HTTP/$httpVer\r\n";
+            }
 
-				// parse first line of server response header
-				if(!$status)
-				{
-					// expect first line to be HTTP response status line, e.g., HTTP/1.1 200 OK
-					if(!preg_match('~^HTTP/(\d\.\d)\s+(\d+)(\s*.*)?~', $line, $m))
-					{
-						if(is_resource($file)) { @fclose($file); }
-						@fclose($fsock);
-						throw new Exception('Expected server response code.  Got '.rtrim($line, "\r\n"));
-					}
+            // connection attempt
+            if (($fsock = @fsockopen($connectHost, $connectPort, $errno, $errstr, $timeout)) === false || !is_resource($fsock)) {
+                if (is_resource($file)) {
+                    @fclose($file);
+                }
+                throw new Exception("Error while connecting to: $host. Please try again later. $errstr");
+            }
 
-					$status = (integer) $m[2];
+            // send HTTP request header
+            $requestHeader .=
+                "Host: $host" . ($port != 80 ? ':' . $port : '') . "\r\n"
+                . ($proxyAuth ? $proxyAuth : '')
+                . 'User-Agent: ' . $userAgent . "\r\n"
+                . ($acceptLanguage ? $acceptLanguage . "\r\n" : '')
+                . $xff . "\r\n"
+                . $via . "\r\n"
+                . $rangeHeader
+                . "Connection: close\r\n"
+                . "\r\n";
+            fwrite($fsock, $requestHeader);
 
-					// Informational 1xx or Client Error 4xx
-					if ($status < 200 || $status >= 400)
-					{
-						if(is_resource($file)) { @fclose($file); }
-						@fclose($fsock);
-						return false;
-					}
+            $streamMetaData = array('timed_out' => false);
+            @stream_set_blocking($fsock, true);
 
-					continue;
-				}
+            if (function_exists('stream_set_timeout')) {
+                @stream_set_timeout($fsock, $timeout);
+            } elseif (function_exists('socket_set_timeout')) {
+                @socket_set_timeout($fsock, $timeout);
+            }
 
-				// handle redirect
-				if(preg_match('/^Location:\s*(.+)/', rtrim($line, "\r\n"), $m))
-				{
-					if(is_resource($file)) { @fclose($file); }
-					@fclose($fsock);
-					// Successful 2xx vs Redirect 3xx
-					if($status < 300)
-					{
-						throw new Exception('Unexpected redirect to Location: '.rtrim($line).' for status code '.$status);
-					}
-					return self::sendHttpRequestBy($method, trim($m[1]), $timeout, $userAgent, $destinationPath, $file, $followDepth+1, $acceptLanguage);
-				}
+            // process header
+            $status = null;
 
-				// save expected content length for later verification
-				if(preg_match('/^Content-Length:\s*(\d+)/', $line, $m))
-				{
-					$contentLength = (integer) $m[1];
-				}
-			}
+            while (!feof($fsock)) {
+                $line = fgets($fsock, 4096);
 
-			if(feof($fsock))
-			{
-				throw new Exception('Unexpected end of transmission');
-			}
+                $streamMetaData = @stream_get_meta_data($fsock);
+                if ($streamMetaData['timed_out']) {
+                    if (is_resource($file)) {
+                        @fclose($file);
+                    }
+                    @fclose($fsock);
+                    throw new Exception('Timed out waiting for server response');
+                }
 
-			// process content/body
-			$response = '';
+                // a blank line marks the end of the server response header
+                if (rtrim($line, "\r\n") == '') {
+                    break;
+                }
 
-			while(!feof($fsock))
-			{
-				$line = fread($fsock, 8192);
+                // parse first line of server response header
+                if (!$status) {
+                    // expect first line to be HTTP response status line, e.g., HTTP/1.1 200 OK
+                    if (!preg_match('~^HTTP/(\d\.\d)\s+(\d+)(\s*.*)?~', $line, $m)) {
+                        if (is_resource($file)) {
+                            @fclose($file);
+                        }
+                        @fclose($fsock);
+                        throw new Exception('Expected server response code.  Got ' . rtrim($line, "\r\n"));
+                    }
 
-				$streamMetaData = @stream_get_meta_data($fsock);
-				if($streamMetaData['timed_out'])
-				{
-					if(is_resource($file)) { @fclose($file); }
-					@fclose($fsock);
-					throw new Exception('Timed out waiting for server response');
-				}
+                    $status = (integer)$m[2];
 
-				$fileLength += $strlen($line);
+                    // Informational 1xx or Client Error 4xx
+                    if ($status < 200 || $status >= 400) {
+                        if (is_resource($file)) {
+                            @fclose($file);
+                        }
+                        @fclose($fsock);
 
-				if(is_resource($file))
-				{
-					// save to file
-					fwrite($file, $line);
-				}
-				else
-				{
-					// concatenate to response string
-					$response .= $line;
-				}
-			}
+                        if (!$getExtendedInfo) {
+                            return false;
+                        } else {
+                            return array('status' => $status);
+                        }
+                    }
 
-			// determine success or failure
-			@fclose(@$fsock);
-		}
-		else if($method == 'fopen')
-		{
-			$response = false;
+                    continue;
+                }
 
-			// we make sure the request takes less than a few seconds to fail
-			// we create a stream_context (works in php >= 5.2.1)
-			// we also set the socket_timeout (for php < 5.2.1)
-			$default_socket_timeout = @ini_get('default_socket_timeout');
-			@ini_set('default_socket_timeout', $timeout);
+                // handle redirect
+                if (preg_match('/^Location:\s*(.+)/', rtrim($line, "\r\n"), $m)) {
+                    if (is_resource($file)) {
+                        @fclose($file);
+                    }
+                    @fclose($fsock);
+                    // Successful 2xx vs Redirect 3xx
+                    if ($status < 300) {
+                        throw new Exception('Unexpected redirect to Location: ' . rtrim($line) . ' for status code ' . $status);
+                    }
+                    return self::sendHttpRequestBy(
+                        $method,
+                        trim($m[1]),
+                        $timeout,
+                        $userAgent,
+                        $destinationPath,
+                        $file,
+                        $followDepth + 1,
+                        $acceptLanguage,
+                        $acceptInvalidSslCertificate = false,
+                        $byteRange,
+                        $getExtendedInfo,
+                        $httpMethod
+                    );
+                }
 
-			$ctx = null;
-			if(function_exists('stream_context_create')) {
-				$stream_options = array(
-					'http' => array(
-						'header' => 'User-Agent: '.$userAgent."\r\n"
-									.($acceptLanguage ? $acceptLanguage."\r\n" : '')
-									.$xff."\r\n"
-									.$via."\r\n",
-						'max_redirects' => 5, // PHP 5.1.0
-						'timeout' => $timeout, // PHP 5.2.1
-					)
-				);
+                // save expected content length for later verification
+                if (preg_match('/^Content-Length:\s*(\d+)/', $line, $m)) {
+                    $contentLength = (integer)$m[1];
+                }
 
-				if(!empty($proxyHost) && !empty($proxyPort))
-				{
-					$stream_options['http']['proxy'] = 'tcp://'.$proxyHost.':'.$proxyPort;
-					$stream_options['http']['request_fulluri'] = true; // required by squid proxy
-					if(!empty($proxyUser) && !empty($proxyPassword))
-					{
-						$stream_options['http']['header'] .= 'Proxy-Authorization: Basic '.base64_encode("$proxyUser:$proxyPassword")."\r\n";
-					}
-				}
+                self::parseHeaderLine($headers, $line);
+            }
 
-				$ctx = stream_context_create($stream_options);
-			}
+            if (feof($fsock)
+                && $httpMethod != 'HEAD'
+            ) {
+                throw new Exception('Unexpected end of transmission');
+            }
 
-			// save to file
-			if(is_resource($file))
-			{
-				$handle = fopen($aUrl, 'rb', false, $ctx);
-				while(!feof($handle))
-				{
-					$response = fread($handle, 8192);
-					$fileLength += $strlen($response);
-					fwrite($file, $response);
-				}
-				fclose($handle);
-			}
-			else
-			{
-				$response = @file_get_contents($aUrl, 0, $ctx);
-				$fileLength = $strlen($response);
-			}
+            // process content/body
+            $response = '';
 
-			// restore the socket_timeout value
-			if(!empty($default_socket_timeout))
-			{
-				@ini_set('default_socket_timeout', $default_socket_timeout);
-			}
-		}
-		else if($method == 'curl')
-		{
-			$ch = @curl_init();
+            while (!feof($fsock)) {
+                $line = fread($fsock, 8192);
 
-			if(!empty($proxyHost) && !empty($proxyPort))
-			{
-				@curl_setopt($ch, CURLOPT_PROXY, $proxyHost.':'.$proxyPort);
-				if(!empty($proxyUser) && !empty($proxyPassword))
-				{
-					// PROXYAUTH defaults to BASIC
-					@curl_setopt($ch, CURLOPT_PROXYUSERPWD, $proxyUser.':'.$proxyPassword);
-				}
-			}
+                $streamMetaData = @stream_get_meta_data($fsock);
+                if ($streamMetaData['timed_out']) {
+                    if (is_resource($file)) {
+                        @fclose($file);
+                    }
+                    @fclose($fsock);
+                    throw new Exception('Timed out waiting for server response');
+                }
 
-			$curl_options = array(
-				// internal to ext/curl
-				CURLOPT_BINARYTRANSFER => is_resource($file),
+                $fileLength += strlen($line);
 
-				// curl options (sorted oldest to newest)
-				CURLOPT_URL => $aUrl,
-				CURLOPT_USERAGENT => $userAgent,
-				CURLOPT_HTTPHEADER => array(
-					$xff,
-					$via,
-					$acceptLanguage
-				),
-				CURLOPT_HEADER => false,
-				CURLOPT_CONNECTTIMEOUT => $timeout,
-			);
-			@curl_setopt_array($ch, $curl_options);
+                if (is_resource($file)) {
+                    // save to file
+                    fwrite($file, $line);
+                } else {
+                    // concatenate to response string
+                    $response .= $line;
+                }
+            }
 
-			/*
-			 * use local list of Certificate Authorities, if available
-			 */
-			if(file_exists(PIWIK_INCLUDE_PATH . '/core/DataFiles/cacert.pem'))
-			{
-				@curl_setopt($ch, CURLOPT_CAINFO, PIWIK_INCLUDE_PATH . '/core/DataFiles/cacert.pem');
-			}
+            // determine success or failure
+            @fclose(@$fsock);
+        } else if ($method == 'fopen') {
+            $response = false;
 
-			/*
-			 * as of php 5.2.0, CURLOPT_FOLLOWLOCATION can't be set if
-			 * in safe_mode or open_basedir is set
-			 */
-			if((string)ini_get('safe_mode') == '' && ini_get('open_basedir') == '')
-			{ 
-				$curl_options = array(
-					// curl options (sorted oldest to newest)
-					CURLOPT_FOLLOWLOCATION => true,
-					CURLOPT_MAXREDIRS => 5, 
-				);
-				@curl_setopt_array($ch, $curl_options);
-			}
+            // we make sure the request takes less than a few seconds to fail
+            // we create a stream_context (works in php >= 5.2.1)
+            // we also set the socket_timeout (for php < 5.2.1)
+            $default_socket_timeout = @ini_get('default_socket_timeout');
+            @ini_set('default_socket_timeout', $timeout);
 
-			if(is_resource($file))
-			{
-				// write output directly to file
-				@curl_setopt($ch, CURLOPT_FILE, $file);
-			}
-			else
-			{
-				// internal to ext/curl
-				@curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-			}
+            $ctx = null;
+            if (function_exists('stream_context_create')) {
+                $stream_options = array(
+                    'http' => array(
+                        'header'        => 'User-Agent: ' . $userAgent . "\r\n"
+                            . ($acceptLanguage ? $acceptLanguage . "\r\n" : '')
+                            . $xff . "\r\n"
+                            . $via . "\r\n"
+                            . $rangeHeader,
+                        'max_redirects' => 5, // PHP 5.1.0
+                        'timeout'       => $timeout, // PHP 5.2.1
+                    )
+                );
 
-			ob_start();
-			$response = @curl_exec($ch);
-			ob_end_clean();
+                if (!empty($proxyHost) && !empty($proxyPort)) {
+                    $stream_options['http']['proxy'] = 'tcp://' . $proxyHost . ':' . $proxyPort;
+                    $stream_options['http']['request_fulluri'] = true; // required by squid proxy
+                    if (!empty($proxyUser) && !empty($proxyPassword)) {
+                        $stream_options['http']['header'] .= 'Proxy-Authorization: Basic ' . base64_encode("$proxyUser:$proxyPassword") . "\r\n";
+                    }
+                }
 
-			if($response === true)
-			{
-				$response = '';
-			}
-			else if($response === false)
-			{
-				$errstr = curl_error($ch);
-				if($errstr != '')
-				{
-					throw new Exception('curl_exec: '.$errstr);
-				}
-				$response = '';
-			}
+                $ctx = stream_context_create($stream_options);
+            }
 
-			$contentLength = curl_getinfo($ch, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
-			$fileLength = is_resource($file) ? curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD) : $strlen($response);
+            // save to file
+            if (is_resource($file)) {
+                $handle = fopen($aUrl, 'rb', false, $ctx);
+                while (!feof($handle)) {
+                    $response = fread($handle, 8192);
+                    $fileLength += strlen($response);
+                    fwrite($file, $response);
+                }
+                fclose($handle);
+            } else {
+                $response = file_get_contents($aUrl, 0, $ctx);
+                $fileLength = strlen($response);
+            }
 
-			@curl_close($ch);
-			unset($ch);
-		}
-		else
-		{
-			throw new Exception('Invalid request method: '.$method);
-		}
+            // restore the socket_timeout value
+            if (!empty($default_socket_timeout)) {
+                @ini_set('default_socket_timeout', $default_socket_timeout);
+            }
+        } else if ($method == 'curl') {
+            if (!self::isCurlEnabled()) {
+                // can be triggered in tests
+                throw new Exception("CURL is not enabled in php.ini, but is being used.");
+            }
+            $ch = @curl_init();
 
-		if(is_resource($file))
-		{
-			fflush($file);
-			@fclose($file);
+            if (!empty($proxyHost) && !empty($proxyPort)) {
+                @curl_setopt($ch, CURLOPT_PROXY, $proxyHost . ':' . $proxyPort);
+                if (!empty($proxyUser) && !empty($proxyPassword)) {
+                    // PROXYAUTH defaults to BASIC
+                    @curl_setopt($ch, CURLOPT_PROXYUSERPWD, $proxyUser . ':' . $proxyPassword);
+                }
+            }
 
-			$fileSize = filesize($destinationPath);
-			if((($contentLength > 0) && ($fileLength != $contentLength)) || ($fileSize != $fileLength))
-			{
-				throw new Exception('File size error: '.$destinationPath.'; expected '.$contentLength.' bytes; received '.$fileLength.' bytes; saved '.$fileSize.' bytes to file');
-			}
-			return true;
-		}
+            $curl_options = array(
+                // internal to ext/curl
+                CURLOPT_BINARYTRANSFER => is_resource($file),
 
-		if(($contentLength > 0) && ($fileLength != $contentLength))
-		{
-			throw new Exception('Content length error: expected '.$contentLength.' bytes; received '.$fileLength.' bytes');
-		}
-		return trim($response);
-	}
+                // curl options (sorted oldest to newest)
+                CURLOPT_URL            => $aUrl,
+                CURLOPT_USERAGENT      => $userAgent,
+                CURLOPT_HTTPHEADER     => array(
+                    $xff,
+                    $via,
+                    $rangeHeader,
+                    $acceptLanguage
+                ),
+                // only get header info if not saving directly to file
+                CURLOPT_HEADER         => is_resource($file) ? false : true,
+                CURLOPT_CONNECTTIMEOUT => $timeout,
+            );
+            // Case archive.php is triggering archiving on https:// and the certificate is not valid
+            if ($acceptInvalidSslCertificate) {
+                $curl_options += array(
+                    CURLOPT_SSL_VERIFYHOST => false,
+                    CURLOPT_SSL_VERIFYPEER => false,
+                );
+            }
+            @curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $httpMethod);
+            if ($httpMethod == 'HEAD') {
+                @curl_setopt($ch, CURLOPT_NOBODY, true);
+            }
 
-	/**
-	 * Fetch the file at $url in the destination $destinationPath
-	 *
-	 * @param string $url
-	 * @param string $destinationPath
-	 * @param int $tries
-	 * @return true on success, throws Exception on failure
-	 */
-	static public function fetchRemoteFile($url, $destinationPath = null, $tries = 0)
-	{
-		@ignore_user_abort(true);
-		Piwik::setMaxExecutionTime(0);
-		return self::sendHttpRequest($url, 10, 'Update', $destinationPath, $tries);
-	}
+            @curl_setopt_array($ch, $curl_options);
+            self::configCurlCertificate($ch);
+
+            /*
+             * as of php 5.2.0, CURLOPT_FOLLOWLOCATION can't be set if
+             * in safe_mode or open_basedir is set
+             */
+            if ((string)ini_get('safe_mode') == '' && ini_get('open_basedir') == '') {
+                $curl_options = array(
+                    // curl options (sorted oldest to newest)
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_MAXREDIRS      => 5,
+                );
+                @curl_setopt_array($ch, $curl_options);
+            }
+
+            if (is_resource($file)) {
+                // write output directly to file
+                @curl_setopt($ch, CURLOPT_FILE, $file);
+            } else {
+                // internal to ext/curl
+                @curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            }
+
+            ob_start();
+            $response = @curl_exec($ch);
+            ob_end_clean();
+
+            if ($response === true) {
+                $response = '';
+            } else if ($response === false) {
+                $errstr = curl_error($ch);
+                if ($errstr != '') {
+                    throw new Exception('curl_exec: ' . $errstr);
+                }
+                $response = '';
+            } else {
+                $header = '';
+                // redirects are included in the output html, so we look for the last line that starts w/ HTTP/...
+                // to split the response
+                while (substr($response, 0, 5) == "HTTP/") {
+                    list($header, $response) = explode("\r\n\r\n", $response, 2);
+                }
+
+                foreach (explode("\r\n", $header) as $line) {
+                    self::parseHeaderLine($headers, $line);
+                }
+            }
+
+            $contentLength = @curl_getinfo($ch, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
+            $fileLength = is_resource($file) ? @curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD) : strlen($response);
+            $status = @curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+            @curl_close($ch);
+            unset($ch);
+        } else {
+            throw new Exception('Invalid request method: ' . $method);
+        }
+
+        if (is_resource($file)) {
+            fflush($file);
+            @fclose($file);
+
+            $fileSize = filesize($destinationPath);
+            if ((($contentLength > 0) && ($fileLength != $contentLength))
+                || ($fileSize != $fileLength)
+            ) {
+                throw new Exception('File size error: ' . $destinationPath . '; expected ' . $contentLength . ' bytes; received ' . $fileLength . ' bytes; saved ' . $fileSize . ' bytes to file');
+            }
+            return true;
+        }
+
+        if (!$getExtendedInfo) {
+            return trim($response);
+        } else {
+            return array(
+                'status'  => $status,
+                'headers' => $headers,
+                'data'    => $response
+            );
+        }
+    }
+
+    /**
+     * Downloads the next chunk of a specific file. The next chunk's byte range
+     * is determined by the existing file's size and the expected file size, which
+     * is stored in the piwik_option table before starting a download. The expected
+     * file size is obtained through a `HEAD` HTTP request.
+     * 
+     * _Note: this function uses the **Range** HTTP header to accomplish downloading in
+     * parts. Not every server supports this header._
+     * 
+     * The proper use of this function is to call it once per request. The browser
+     * should continue to send requests to Piwik which will in turn call this method
+     * until the file has completely downloaded. In this way, the user can be informed
+     * of a download's progress.
+     * 
+     * **Example Usage**
+     * 
+     * ```
+     * // browser JavaScript
+     * var downloadFile = function (isStart) {
+     *     var ajax = new ajaxHelper();
+     *     ajax.addParams({
+     *         module: 'MyPlugin',
+     *         action: 'myAction',
+     *         isStart: isStart ? 1 : 0
+     *     }, 'post');
+     *     ajax.setCallback(function (response) {
+     *         var progress = response.progress
+     *         // ...update progress...
+     *
+     *         downloadFile(false);
+     *     });
+     *     ajax.send();
+     * }
+     * 
+     * downloadFile(true);
+     * ```
+     * 
+     * ```
+     * // PHP controller action
+     * public function myAction()
+     * {
+     *     $outputPath = PIWIK_INCLUDE_PATH . '/tmp/averybigfile.zip';
+     *     $isStart = Common::getRequestVar('isStart', 1, 'int');
+     *     Http::downloadChunk("http://bigfiles.com/averybigfile.zip", $outputPath, $isStart == 1);
+     * }
+     * ```
+     * 
+     * @param string $url The url to download from.
+     * @param string $outputPath The path to the file to save/append to.
+     * @param bool $isContinuation `true` if this is the continuation of a download,
+     *                             or if we're starting a fresh one.
+     * @throws Exception if the file already exists and we're starting a new download,
+     *                   if we're trying to continue a download that never started
+     * @return array
+     * @api
+     */
+    public static function downloadChunk($url, $outputPath, $isContinuation)
+    {
+        // make sure file doesn't already exist if we're starting a new download
+        if (!$isContinuation
+            && file_exists($outputPath)
+        ) {
+            throw new Exception(
+                Piwik::translate('General_DownloadFail_FileExists', "'" . $outputPath . "'")
+                . ' ' . Piwik::translate('General_DownloadPleaseRemoveExisting'));
+        }
+
+        // if we're starting a download, get the expected file size & save as an option
+        $downloadOption = $outputPath . '_expectedDownloadSize';
+        if (!$isContinuation) {
+            $expectedFileSizeResult = Http::sendHttpRequest(
+                $url,
+                $timeout = 300,
+                $userAgent = null,
+                $destinationPath = null,
+                $followDepth = 0,
+                $acceptLanguage = false,
+                $byteRange = false,
+                $getExtendedInfo = true,
+                $httpMethod = 'HEAD'
+            );
+
+            $expectedFileSize = 0;
+            if (isset($expectedFileSizeResult['headers']['Content-Length'])) {
+                $expectedFileSize = (int)$expectedFileSizeResult['headers']['Content-Length'];
+            }
+
+            if ($expectedFileSize == 0) {
+                Log::info("HEAD request for '%s' failed, got following: %s", $url, print_r($expectedFileSizeResult, true));
+                throw new Exception(Piwik::translate('General_DownloadFail_HttpRequestFail'));
+            }
+
+            Option::set($downloadOption, $expectedFileSize);
+        } else {
+            $expectedFileSize = (int)Option::get($downloadOption);
+            if ($expectedFileSize === false) { // sanity check
+                throw new Exception("Trying to continue a download that never started?! That's not supposed to happen...");
+            }
+        }
+
+        // if existing file is already big enough, then fail so we don't accidentally overwrite
+        // existing DB
+        $existingSize = file_exists($outputPath) ? filesize($outputPath) : 0;
+        if ($existingSize >= $expectedFileSize) {
+            throw new Exception(
+                Piwik::translate('General_DownloadFail_FileExistsContinue', "'" . $outputPath . "'")
+                . ' ' . Piwik::translate('General_DownloadPleaseRemoveExisting'));
+        }
+
+        // download a chunk of the file
+        $result = Http::sendHttpRequest(
+            $url,
+            $timeout = 300,
+            $userAgent = null,
+            $destinationPath = null,
+            $followDepth = 0,
+            $acceptLanguage = false,
+            $byteRange = array($existingSize, min($existingSize + 1024 * 1024 - 1, $expectedFileSize)),
+            $getExtendedInfo = true
+        );
+
+        if ($result === false
+            || $result['status'] < 200
+            || $result['status'] > 299
+        ) {
+            $result['data'] = self::truncateStr($result['data'], 1024);
+            Log::info("Failed to download range '%s-%s' of file from url '%s'. Got result: %s",
+                $byteRange[0], $byteRange[1], $url, print_r($result, true));
+
+            throw new Exception(Piwik::translate('General_DownloadFail_HttpRequestFail'));
+        }
+
+        // write chunk to file
+        $f = fopen($outputPath, 'ab');
+        fwrite($f, $result['data']);
+        fclose($f);
+
+        clearstatcache($clear_realpath_cache = true, $outputPath);
+        return array(
+            'current_size'       => filesize($outputPath),
+            'expected_file_size' => $expectedFileSize,
+        );
+    }
+
+    /**
+     * Will configure CURL handle $ch
+     * to use local list of Certificate Authorities,
+     */
+    public static function configCurlCertificate(&$ch)
+    {
+        if (file_exists(PIWIK_INCLUDE_PATH . '/core/DataFiles/cacert.pem')) {
+            @curl_setopt($ch, CURLOPT_CAINFO, PIWIK_INCLUDE_PATH . '/core/DataFiles/cacert.pem');
+        }
+    }
+
+    public static function getUserAgent()
+    {
+        return !empty($_SERVER['HTTP_USER_AGENT'])
+            ? $_SERVER['HTTP_USER_AGENT']
+            : 'Piwik/' . Version::VERSION;
+    }
+
+    /**
+     * Fetches a file located at `$url` and saves it to `$destinationPath`.
+     *
+     * @param string $url The URL of the file to download.
+     * @param string $destinationPath The path to download the file to.
+     * @param int $tries (deprecated)
+     * @param int $timeout The amount of seconds to wait before aborting the HTTP request.
+     * @throws Exception if the response cannot be saved to `$destinationPath`, if the HTTP response cannot be sent,
+     *                   if there are more than 5 redirects or if the request times out.
+     * @return bool `true` on success, throws Exception on failure
+     * @api
+     */
+    public static function fetchRemoteFile($url, $destinationPath = null, $tries = 0, $timeout = 10)
+    {
+        @ignore_user_abort(true);
+        SettingsServer::setMaxExecutionTime(0);
+        return self::sendHttpRequest($url, $timeout, 'Update', $destinationPath);
+    }
+
+    /**
+     * Utility function, parses an HTTP header line into key/value & sets header
+     * array with them.
+     *
+     * @param array $headers
+     * @param string $line
+     */
+    private static function parseHeaderLine(&$headers, $line)
+    {
+        $parts = explode(':', $line, 2);
+        if (count($parts) == 1) {
+            return;
+        }
+
+        list($name, $value) = $parts;
+        $headers[trim($name)] = trim($value);
+    }
+
+    /**
+     * Utility function that truncates a string to an arbitrary limit.
+     *
+     * @param string $str The string to truncate.
+     * @param int $limit The maximum length of the truncated string.
+     * @return string
+     */
+    private static function truncateStr($str, $limit)
+    {
+        if (strlen($str) > $limit) {
+            return substr($str, 0, $limit) . '...';
+        }
+        return $str;
+    }
 }

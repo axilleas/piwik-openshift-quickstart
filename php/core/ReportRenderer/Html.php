@@ -4,121 +4,161 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Html.php 4879 2011-06-05 22:59:00Z JulienM $
  *
- * @category Piwik
- * @package Piwik_ReportRenderer
  */
+namespace Piwik\ReportRenderer;
 
+use Piwik\Plugins\API\API;
+use Piwik\ReportRenderer;
+use Piwik\SettingsPiwik;
+use Piwik\View;
 
 /**
  *
- * @package Piwik_ReportRenderer
  */
-class Piwik_ReportRenderer_Html extends Piwik_ReportRenderer
+class Html extends ReportRenderer
 {
-	const REPORT_TITLE_TEXT_SIZE = 11;
-	const REPORT_TABLE_HEADER_TEXT_SIZE = 11;
-	const REPORT_TABLE_ROW_TEXT_SIZE = 11;
-	const REPORT_BACK_TO_TOP_TEXT_SIZE = 9;
+    const IMAGE_GRAPH_WIDTH = 700;
+    const IMAGE_GRAPH_HEIGHT = 200;
 
-	private $rendering = "";
+    const REPORT_TITLE_TEXT_SIZE = 11;
+    const REPORT_TABLE_HEADER_TEXT_SIZE = 11;
+    const REPORT_TABLE_ROW_TEXT_SIZE = 11;
+    const REPORT_BACK_TO_TOP_TEXT_SIZE = 9;
 
-	public function setLocale($locale)
-	{
-		//Nothing to do
-	}
+    const HTML_CONTENT_TYPE = 'text/html';
+    const HTML_FILE_EXTENSION = 'html';
 
-	public function sendToDisk($filename)
-	{
-		$this->epilogue();
+    protected $renderImageInline = false;
 
-		$filename = Piwik_ReportRenderer::appendExtension($filename, "html");
-		$outputFilename = Piwik_ReportRenderer::getOutputPath($filename);
+    private $rendering = "";
 
-		$emailReport = @fopen($outputFilename, "w");
+    public function setLocale($locale)
+    {
+        //Nothing to do
+    }
 
-		if (!$emailReport) {
-			throw new Exception ("The file : " . $outputFilename . " can not be opened in write mode.");
-		}
+    /**
+     * Currently only used for HTML reports.
+     * When sent by mail, images are attached to the mail: renderImageInline = false
+     * When downloaded, images are included base64 encoded in the report body: renderImageInline = true
+     *
+     * @param boolean $renderImageInline
+     */
+    public function setRenderImageInline($renderImageInline)
+    {
+        $this->renderImageInline = $renderImageInline;
+    }
 
-		fwrite($emailReport, $this->rendering);
-		fclose($emailReport);
+    public function sendToDisk($filename)
+    {
+        $this->epilogue();
 
-		return $outputFilename;
-	}
+        return ReportRenderer::writeFile($filename, self::HTML_FILE_EXTENSION, $this->rendering);
+    }
 
-	public function sendToBrowserDownload($filename)
-	{
-		$this->epilogue();
+    public function sendToBrowserDownload($filename)
+    {
+        $this->epilogue();
 
-		$filename = Piwik_ReportRenderer::appendExtension($filename, "html");
+        ReportRenderer::sendToBrowser($filename, self::HTML_FILE_EXTENSION, self::HTML_CONTENT_TYPE, $this->rendering);
+    }
 
-		Piwik::overrideCacheControlHeaders();
-		header('Content-Description: File Transfer');
-		header('Content-Type: text/html');
-		header('Content-Disposition: attachment; filename="'.basename($filename).'";');
-		header('Content-Length: '.strlen($this->rendering));
-		echo $this->rendering;
-	}
+    public function sendToBrowserInline($filename)
+    {
+        $this->epilogue();
 
-	private function epilogue()
-	{
-		$smarty = new Piwik_Smarty();
-		$this->rendering .= $smarty->fetch(self::prefixTemplatePath("html_report_footer.tpl"));
-	}
+        ReportRenderer::inlineToBrowser(self::HTML_CONTENT_TYPE, $this->rendering);
+    }
 
-	public function renderFrontPage($websiteName, $prettyDate, $description, $reportMetadata)
-	{
-		$smarty = new Piwik_Smarty();
-		$this->assignCommonParameters($smarty);
+    public function getRenderedReport()
+    {
+        $this->epilogue();
 
-		$smarty->assign("websiteName", $websiteName);
-		$smarty->assign("prettyDate", $prettyDate);
-		$smarty->assign("description", $description);
-		$smarty->assign("reportMetadata", $reportMetadata);
+        return $this->rendering;
+    }
 
-		$this->rendering .= $smarty->fetch(self::prefixTemplatePath("html_report_header.tpl"));
-	}
+    private function epilogue()
+    {
+        $view = new View('@CoreHome/ReportRenderer/_htmlReportFooter');
+        $this->rendering .= $view->render();
+    }
 
-	private function assignCommonParameters($smarty)
-	{
-		$smarty->assign("reportTitleTextColor", Piwik_ReportRenderer::REPORT_TITLE_TEXT_COLOR);
-		$smarty->assign("reportTitleTextSize", self::REPORT_TITLE_TEXT_SIZE);
-		$smarty->assign("reportTextColor", Piwik_ReportRenderer::REPORT_TEXT_COLOR);
-		$smarty->assign("tableHeaderBgColor", Piwik_ReportRenderer::TABLE_HEADER_BG_COLOR);
-		$smarty->assign("tableHeaderTextColor", Piwik_ReportRenderer::TABLE_HEADER_TEXT_COLOR);
-		$smarty->assign("tableCellBorderColor", Piwik_ReportRenderer::TABLE_CELL_BORDER_COLOR);
-		$smarty->assign("tableBgColor", Piwik_ReportRenderer::TABLE_BG_COLOR);
-		$smarty->assign("reportTableHeaderTextSize", self::REPORT_TABLE_HEADER_TEXT_SIZE);
-		$smarty->assign("reportTableRowTextSize", self::REPORT_TABLE_ROW_TEXT_SIZE);
-		$smarty->assign("reportBackToTopTextSize", self::REPORT_BACK_TO_TOP_TEXT_SIZE);
-		$smarty->assign("currentPath", Piwik::getPiwikUrl());
-		$smarty->assign("logoHeader", Piwik_API_API::getInstance()->getHeaderLogoUrl());
-	}
+    public function renderFrontPage($reportTitle, $prettyDate, $description, $reportMetadata, $segment)
+    {
+        $frontPageView = new View('@CoreHome/ReportRenderer/_htmlReportHeader');
+        $this->assignCommonParameters($frontPageView);
 
-	public function renderReport($processedReport)
-	{
-		$smarty = new Piwik_Smarty();
-		$this->assignCommonParameters($smarty);
+        $frontPageView->assign("reportTitle", $reportTitle);
+        $frontPageView->assign("prettyDate", $prettyDate);
+        $frontPageView->assign("description", $description);
+        $frontPageView->assign("reportMetadata", $reportMetadata);
 
-		$reportMetadata = $processedReport['metadata'];
-		$smarty->assign("reportName", $reportMetadata['name']);
-		$smarty->assign("reportId", $reportMetadata['uniqueId']);
+        // segment
+        $displaySegment = ($segment != null);
+        $frontPageView->assign("displaySegment", $displaySegment);
+        if ($displaySegment) {
+            $frontPageView->assign("segmentName", $segment['name']);
+        }
 
-		$reportData = $processedReport['reportData'];
-		$columns = $processedReport['columns'];
-		list($reportData, $columns) = self::processTableFormat($reportMetadata, $reportData, $columns);
+        $this->rendering .= $frontPageView->render();
+    }
 
-		$smarty->assign("reportColumns", $columns);
-		$smarty->assign("reportRows", $reportData->getRows());
-		$smarty->assign("reportRowsMetadata", $processedReport['reportMetadata']->getRows());
+    private function assignCommonParameters(View $view)
+    {
+        $view->assign("reportTitleTextColor", ReportRenderer::REPORT_TITLE_TEXT_COLOR);
+        $view->assign("reportTitleTextSize", self::REPORT_TITLE_TEXT_SIZE);
+        $view->assign("reportTextColor", ReportRenderer::REPORT_TEXT_COLOR);
+        $view->assign("tableHeaderBgColor", ReportRenderer::TABLE_HEADER_BG_COLOR);
+        $view->assign("tableHeaderTextColor", ReportRenderer::TABLE_HEADER_TEXT_COLOR);
+        $view->assign("tableCellBorderColor", ReportRenderer::TABLE_CELL_BORDER_COLOR);
+        $view->assign("tableBgColor", ReportRenderer::TABLE_BG_COLOR);
+        $view->assign("reportTableHeaderTextSize", self::REPORT_TABLE_HEADER_TEXT_SIZE);
+        $view->assign("reportTableRowTextSize", self::REPORT_TABLE_ROW_TEXT_SIZE);
+        $view->assign("reportBackToTopTextSize", self::REPORT_BACK_TO_TOP_TEXT_SIZE);
+        $view->assign("currentPath", SettingsPiwik::getPiwikUrl());
+        $view->assign("logoHeader", API::getInstance()->getHeaderLogoUrl());
+    }
 
-		$this->rendering .= $smarty->fetch(self::prefixTemplatePath("html_report_body.tpl"));
-	}
+    public function renderReport($processedReport)
+    {
+        $reportView = new View('@CoreHome/ReportRenderer/_htmlReportBody');
+        $this->assignCommonParameters($reportView);
 
-	private static function prefixTemplatePath($templateFile)
-	{
-		return PIWIK_USER_PATH . "/plugins/CoreHome/templates/" . $templateFile;
-	}
+        $reportMetadata = $processedReport['metadata'];
+        $reportData = $processedReport['reportData'];
+        $columns = $processedReport['columns'];
+        list($reportData, $columns) = self::processTableFormat($reportMetadata, $reportData, $columns);
+
+        $reportView->assign("reportName", $reportMetadata['name']);
+        $reportView->assign("reportId", $reportMetadata['uniqueId']);
+        $reportView->assign("reportColumns", $columns);
+        $reportView->assign("reportRows", $reportData->getRows());
+        $reportView->assign("reportRowsMetadata", $processedReport['reportMetadata']->getRows());
+        $reportView->assign("displayTable", $processedReport['displayTable']);
+
+        $displayGraph = $processedReport['displayGraph'];
+        $evolutionGraph = $processedReport['evolutionGraph'];
+        $reportView->assign("displayGraph", $displayGraph);
+
+        if ($displayGraph) {
+            $reportView->assign("graphWidth", self::IMAGE_GRAPH_WIDTH);
+            $reportView->assign("graphHeight", self::IMAGE_GRAPH_HEIGHT);
+            $reportView->assign("renderImageInline", $this->renderImageInline);
+
+            if ($this->renderImageInline) {
+                $staticGraph = parent::getStaticGraph(
+                    $reportMetadata,
+                    self::IMAGE_GRAPH_WIDTH,
+                    self::IMAGE_GRAPH_HEIGHT,
+                    $evolutionGraph,
+                    $processedReport['segment']
+                );
+                $reportView->assign("generatedImageGraph", base64_encode($staticGraph));
+                unset($generatedImageGraph);
+            }
+        }
+
+        $this->rendering .= $reportView->render();
+    }
 }

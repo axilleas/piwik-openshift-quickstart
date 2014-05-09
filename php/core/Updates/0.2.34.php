@@ -4,22 +4,25 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: 0.2.34.php 2968 2010-08-20 15:26:33Z vipsoft $
  *
- * @category Piwik
- * @package Updates
  */
 
+namespace Piwik\Updates;
+
+use Piwik\Piwik;
+use Piwik\Plugins\SitesManager\API;
+use Piwik\Tracker\Cache;
+use Piwik\Updates;
+
 /**
- * @package Updates
  */
-class Piwik_Updates_0_2_34 extends Piwik_Updates
+class Updates_0_2_34 extends Updates
 {
-	static function update($schema = 'Myisam')
-	{
-		// force regeneration of cache files following #648
-		Piwik::setUserIsSuperUser();
-		$allSiteIds = Piwik_SitesManager_API::getInstance()->getAllSitesId();
-		Piwik_Common::regenerateCacheWebsiteAttributes($allSiteIds);
-	}
+    static function update()
+    {
+        // force regeneration of cache files following #648
+        Piwik::setUserHasSuperUserAccess();
+        $allSiteIds = API::getInstance()->getAllSitesId();
+        Cache::regenerateCacheWebsiteAttributes($allSiteIds);
+    }
 }

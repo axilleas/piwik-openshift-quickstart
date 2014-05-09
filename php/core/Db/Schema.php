@@ -4,281 +4,242 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Schema.php 4297 2011-04-03 19:31:58Z vipsoft $
  *
- * @category Piwik
- * @package Piwik
  */
+namespace Piwik\Db;
+
+use Piwik\Config;
+use Piwik\Singleton;
 
 /**
  * Schema abstraction
  *
  * Note: no relation to the ZF proposals for Zend_Db_Schema_Manager
  *
- * @package Piwik
- * @subpackage Piwik_Db
+ * @method static \Piwik\Db\Schema getInstance()
  */
-class Piwik_Db_Schema
+class Schema extends Singleton
 {
-	static private $instance = null;
+    const DEFAULT_SCHEMA = 'Mysql';
 
-	private $schema = null;
+    /**
+     * Type of database schema
+     *
+     * @var string
+     */
+    private $schema = null;
 
-	/**
-	 * Returns the singleton Piwik_Db_Schema
-	 *
-	 * @return Piwik_Db_Schema
-	 */
-	static public function getInstance()
-	{
-		if (self::$instance === null)
-		{
-			self::$instance = new self;
-		}
-		return self::$instance;
-	}
 
-	/**
-	 * Get schema class name
-	 *
-	 * @param string $schemaName
-	 * @return string
-	 */
-	private static function getSchemaClassName($schemaName)
-	{
-		return 'Piwik_Db_Schema_' . str_replace(' ', '_', ucwords(str_replace('_', ' ', strtolower($schemaName))));
-	}
+    /**
+     * Get schema class name
+     *
+     * @param string $schemaName
+     * @return string
+     */
+    private static function getSchemaClassName($schemaName)
+    {
+        // Upgrade from pre 2.0.4
+        if(strtolower($schemaName) == 'myisam'
+            || empty($schemaName)) {
+            $schemaName = self::DEFAULT_SCHEMA;
+        }
 
-	/**
-	 * Get list of schemas
-	 *
-	 * @return array
-	 */
-	public static function getSchemas($adapterName)
-	{
-		static $allSchemaNames = array(
-			// MySQL storage engines
-			'MYSQL' => array(
-				'Myisam',
-//				'Innodb',
-//				'Infinidb',
-			),
+        $class = str_replace(' ', '\\', ucwords(str_replace('_', ' ', strtolower($schemaName))));
+        return '\Piwik\Db\Schema\\' . $class;
+    }
 
-			// Microsoft SQL Server
+    /**
+     * Get list of schemas
+     *
+     * @param string $adapterName
+     * @return array
+     */
+    public static function getSchemas($adapterName)
+    {
+        static $allSchemaNames = array(
+            'MYSQL' => array(
+                self::DEFAULT_SCHEMA,
+                // InfiniDB
+            ),
+
+            // Microsoft SQL Server
 //			'MSSQL' => array( 'Mssql' ),
 
-			// PostgreSQL
+            // PostgreSQL
 //			'PDO_PGSQL' => array( 'Pgsql' ),
 
-			// IBM DB2
+            // IBM DB2
 //			'IBM' => array( 'Ibm' ),
 
-			// Oracle
+            // Oracle
 //			'OCI' => array( 'Oci' ),
-		);
+        );
 
-		$adapterName = strtoupper($adapterName);
-		switch($adapterName)
-		{
-			case 'PDO_MYSQL':
-			case 'MYSQLI':
-				$adapterName = 'MYSQL';
-				break;
+        $adapterName = strtoupper($adapterName);
+        switch ($adapterName) {
+            case 'PDO_MYSQL':
+            case 'MYSQLI':
+                $adapterName = 'MYSQL';
+                break;
 
-			case 'PDO_MSSQL':
-			case 'SQLSRV':
-				$adapterName = 'MSSQL';
-				break;
+            case 'PDO_MSSQL':
+            case 'SQLSRV':
+                $adapterName = 'MSSQL';
+                break;
 
-			case 'PDO_IBM':
-			case 'DB2':
-				$adapterName = 'IBM';
-				break;
+            case 'PDO_IBM':
+            case 'DB2':
+                $adapterName = 'IBM';
+                break;
 
-			case 'PDO_OCI':
-			case 'ORACLE':
-				$adapterName = 'OCI';
-				break;
-		}
-		$schemaNames = $allSchemaNames[$adapterName];
+            case 'PDO_OCI':
+            case 'ORACLE':
+                $adapterName = 'OCI';
+                break;
+        }
+        $schemaNames = $allSchemaNames[$adapterName];
 
-		$schemas = array();
+        $schemas = array();
 
-		foreach($schemaNamess as $schemaName)
-		{
-			$className = 'Piwik_Db_Schema_'.$schemaName;
-			if(call_user_func(array($className, 'isAvailable')))
-			{
-				$schemas[] = $schemaName;
-			}
-		}
+        foreach ($schemaNames as $schemaName) {
+            $className = __NAMESPACE__ . '\\Schema\\' . $schemaName;
+            if (call_user_func(array($className, 'isAvailable'))) {
+                $schemas[] = $schemaName;
+            }
+        }
 
-		return $schemas;
-	}
+        return $schemas;
+    }
 
-	/**
-	 * Load schema
-	 */
-	private function loadSchema()
-	{
-		$schema = null;
-		Piwik_PostEvent('Schema.loadSchema', $schema);
-		if($schema === null)
-		{
-			$config = Zend_Registry::get('config');
-			$dbInfos = $config->database->toArray();
-			if(isset($dbInfos['schema']))
-			{
-				$schemaName = $dbInfos['schema'];
-			}
-			else
-			{
-				$schemaName = 'Myisam';
-			}
-			$className = self::getSchemaClassName($schemaName);
-			$schema = new $className();
-		}
-		$this->schema = $schema;
-	}
+    /**
+     * Load schema
+     */
+    private function loadSchema()
+    {
+        $config = Config::getInstance();
+        $dbInfos = $config->database;
+        $schemaName = trim($dbInfos['schema']);
 
-	/**
-	 * Returns an instance that subclasses Piwik_Db_Schema
-	 *
-	 * @return Piwik_Db_Schema_Interface
-	 */
-	private function getSchema()
-	{
-		if ($this->schema === null)
-		{
-			$this->loadSchema();
-		}
-		return $this->schema;
-	}
+        $className = self::getSchemaClassName($schemaName);
+        $this->schema = new $className();
+    }
 
-	/**
-	 * Get the SQL to create a specific Piwik table
-	 *
-	 * @return string SQL
-	 */
-	public function getTableCreateSql( $tableName )
-	{
-		return $this->getSchema()->getTableCreateSql($tableName);
-	}
+    /**
+     * Returns an instance that subclasses Schema
+     *
+     * @return \Piwik\Db\SchemaInterface
+     */
+    private function getSchema()
+    {
+        if ($this->schema === null) {
+            $this->loadSchema();
+        }
+        return $this->schema;
+    }
 
-	/**
-	 * Get the SQL to create Piwik tables
-	 *
-	 * @return array of strings containing SQL
-	 */
-	public function getTablesCreateSql()
-	{
-		return $this->getSchema()->getTablesCreateSql();
-	}
+    /**
+     * Get the SQL to create a specific Piwik table
+     *
+     * @param string $tableName name of the table to create
+     * @return string  SQL
+     */
+    public function getTableCreateSql($tableName)
+    {
+        return $this->getSchema()->getTableCreateSql($tableName);
+    }
 
-	/**
-	 * Create database
-	 */
-	public function createDatabase( $dbName = null )
-	{
-		$this->getSchema()->createDatabase($dbName);
-	}
+    /**
+     * Get the SQL to create Piwik tables
+     *
+     * @return array   array of strings containing SQL
+     */
+    public function getTablesCreateSql()
+    {
+        return $this->getSchema()->getTablesCreateSql();
+    }
 
-	/**
-	 * Drop database
-	 */
-	public function dropDatabase()
-	{
-		$this->getSchema()->dropDatabase();
-	}
+    /**
+     * Creates a new table in the database.
+     *
+     * @param string $nameWithoutPrefix   The name of the table without any piwik prefix.
+     * @param string $createDefinition    The table create definition
+     */
+    public function createTable($nameWithoutPrefix, $createDefinition)
+    {
+        $this->getSchema()->createTable($nameWithoutPrefix, $createDefinition);
+    }
 
-	/**
-	 * Create all tables
-	 */
-	public function createTables()
-	{
-		$this->getSchema()->createTables();
-	}
+    /**
+     * Create database
+     *
+     * @param null|string $dbName database name to create
+     */
+    public function createDatabase($dbName = null)
+    {
+        $this->getSchema()->createDatabase($dbName);
+    }
 
-	/**
-	 * Creates an entry in the User table for the "anonymous" user.
-	 */
-	public function createAnonymousUser()
-	{
-		$this->getSchema()->createAnonymousUser();
-	}
+    /**
+     * Drop database
+     */
+    public function dropDatabase($dbName = null)
+    {
+        $this->getSchema()->dropDatabase($dbName);
+    }
 
-	/**
-	 * Truncate all tables
-	 */
-	public function truncateAllTables()
-	{
-		$this->getSchema()->truncateAllTables();
-	}
+    /**
+     * Create all tables
+     */
+    public function createTables()
+    {
+        $this->getSchema()->createTables();
+    }
 
-	/**
-	 * Drop specific tables
-	 */
-	public function dropTables( $doNotDelete = array() )
-	{
-		$this->getSchema()->dropTables($doNotDelete);
-	}
+    /**
+     * Creates an entry in the User table for the "anonymous" user.
+     */
+    public function createAnonymousUser()
+    {
+        $this->getSchema()->createAnonymousUser();
+    }
 
-	/**
-	 * Names of all the prefixed tables in piwik
-	 * Doesn't use the DB
-	 *
-	 * @return array Table names
-	 */
-	public function getTablesNames()
-	{
-		return $this->getSchema()->getTablesNames();
-	}
+    /**
+     * Truncate all tables
+     */
+    public function truncateAllTables()
+    {
+        $this->getSchema()->truncateAllTables();
+    }
 
-	/**
-	 * Get list of tables installed
-	 *
-	 * @param bool $forceReload Invalidate cache
-	 * @param string $idSite
-	 * @return array Tables installed
-	 */
-	public function getTablesInstalled($forceReload = true)
-	{
-		return $this->getSchema()->getTablesInstalled($forceReload);
-	}
+    /**
+     * Names of all the prefixed tables in piwik
+     * Doesn't use the DB
+     *
+     * @return array Table names
+     */
+    public function getTablesNames()
+    {
+        return $this->getSchema()->getTablesNames();
+    }
 
-	/**
-	 * Returns true if Piwik tables exist
-	 *
-	 * @return bool True if tables exist; false otherwise
-	 */
-	public function hasTables()
-	{
-		return $this->getSchema()->hasTables();
-	}
-}
+    /**
+     * Get list of tables installed
+     *
+     * @param bool $forceReload Invalidate cache
+     * @return array  installed tables
+     */
+    public function getTablesInstalled($forceReload = true)
+    {
+        return $this->getSchema()->getTablesInstalled($forceReload);
+    }
 
-/**
- * Database schema interface
- *
- * @package Piwik
- * @subpackage Piwik_Db
- */
-interface Piwik_Db_Schema_Interface
-{
-	static public function isAvailable();
-
-	public function getTableCreateSql($tableName);
-	public function getTablesCreateSql();
-
-	public function createDatabase( $dbName = null );
-	public function dropDatabase();
-
-	public function createTables();
-	public function createAnonymousUser();
-	public function truncateAllTables();
-	public function dropTables( $doNotDelete = array() );
-
-	public function getTablesNames();
-	public function getTablesInstalled($forceReload = true);
-	public function hasTables();
+    /**
+     * Returns true if Piwik tables exist
+     *
+     * @return bool  True if tables exist; false otherwise
+     */
+    public function hasTables()
+    {
+        return $this->getSchema()->hasTables();
+    }
 }

@@ -4,32 +4,34 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: 1.4-rc1.php 4609 2011-04-30 01:46:23Z matt $
  *
- * @category Piwik
- * @package Updates
  */
+
+namespace Piwik\Updates;
+
+use Piwik\Common;
+use Piwik\Updater;
+use Piwik\Updates;
 
 /**
- * @package Updates
  */
-class Piwik_Updates_1_4_rc1 extends Piwik_Updates
+class Updates_1_4_rc1 extends Updates
 {
-	static function getSql($schema = 'Myisam')
-	{
-		return array(
-		    'ALTER TABLE `'. Piwik_Common::prefixTable('pdf') .'`
-		    	ADD COLUMN `format` VARCHAR(10)' => false,
-		    'UPDATE `'. Piwik_Common::prefixTable('pdf') .'`
-		    	SET format = "pdf"' => false,
-		);
-	}
+    static function getSql()
+    {
+        return array(
+            'UPDATE `' . Common::prefixTable('pdf') . '`
+		    	SET format = "pdf"'                                                                         => '42S22',
+            'ALTER TABLE `' . Common::prefixTable('pdf') . '`
+		    	ADD COLUMN `format` VARCHAR(10)' => '42S22',
+        );
+    }
 
-	static function update()
-	{
-		try {
-			Piwik_Updater::updateDatabase(__FILE__, self::getSql());
-		}
-		catch(Exception $e){}
-	}
+    static function update()
+    {
+        try {
+            Updater::updateDatabase(__FILE__, self::getSql());
+        } catch (\Exception $e) {
+        }
+    }
 }

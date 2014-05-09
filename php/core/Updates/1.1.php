@@ -4,29 +4,41 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: 1.1.php 3643 2011-01-06 05:10:03Z vipsoft $
  *
- * @category Piwik
- * @package Updates
  */
+
+namespace Piwik\Updates;
+
+use Piwik\Config;
+use Piwik\Piwik;
+use Piwik\Updates;
 
 /**
- * @package Updates
  */
-class Piwik_Updates_1_1 extends Piwik_Updates
+class Updates_1_1 extends Updates
 {
-	static function update($schema = 'Myisam')
-	{
-		$config = Zend_Registry::get('config');
+    static function update()
+    {
+        $config = Config::getInstance();
 
-		$rootLogin = $config->superuser->login;
-		try {
-			// throws an exception if invalid
-			Piwik::checkValidLoginString($rootLogin);
-		} catch(Exception $e) {
-			throw new Exception('Superuser login name "' . $rootLogin . '" is no longer a valid format. '
-						. $e->getMessage()
-						. ' Edit your config/config.ini.php to change it.');
-		}
-	}
+        try {
+            $superuser = $config->superuser;
+        } catch (\Exception $e) {
+            return;
+        }
+
+        if (empty($superuser['login'])) {
+            return;
+        }
+
+        $rootLogin = $superuser['login'];
+        try {
+            // throws an exception if invalid
+            Piwik::checkValidLoginString($rootLogin);
+        } catch (\Exception $e) {
+            throw new \Exception('Superuser login name "' . $rootLogin . '" is no longer a valid format. '
+                . $e->getMessage()
+                . ' Edit your config/config.ini.php to change it.');
+        }
+    }
 }

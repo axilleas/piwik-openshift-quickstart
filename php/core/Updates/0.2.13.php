@@ -4,33 +4,35 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: 0.2.13.php 4771 2011-05-22 21:49:27Z vipsoft $
  *
- * @category Piwik
- * @package Updates
  */
+
+namespace Piwik\Updates;
+
+use Piwik\Common;
+use Piwik\Updater;
+use Piwik\Updates;
 
 /**
- * @package Updates
  */
-class Piwik_Updates_0_2_13 extends Piwik_Updates
+class Updates_0_2_13 extends Updates
 {
-	static function getSql($schema = 'Myisam')
-	{
-		return array(
-			'DROP TABLE IF EXISTS `'. Piwik_Common::prefixTable('option') .'`' => false,
+    static function getSql()
+    {
+        return array(
+            'DROP TABLE IF EXISTS `' . Common::prefixTable('option') . '`'    => false,
 
-			'CREATE TABLE `'. Piwik_Common::prefixTable('option') ."` (
+            'CREATE TABLE `' . Common::prefixTable('option') . "` (
 				option_name VARCHAR( 64 ) NOT NULL ,
 				option_value LONGTEXT NOT NULL ,
 				autoload TINYINT NOT NULL DEFAULT '1',
 				PRIMARY KEY ( option_name )
 			)" => false,
-		);
-	}
+        );
+    }
 
-	static function update()
-	{
-		Piwik_Updater::updateDatabase(__FILE__, self::getSql());
-	}
+    static function update()
+    {
+        Updater::updateDatabase(__FILE__, self::getSql());
+    }
 }

@@ -1,40 +1,47 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
+ *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Controller.php 3565 2011-01-03 05:49:45Z matt $
- * 
- * @category Piwik_Plugins
- * @package Piwik_SEO
+ *
  */
- 
+namespace Piwik\Plugins\SEO;
+
+use Piwik\Common;
+use Piwik\DataTable\Renderer;
+use Piwik\Site;
+use Piwik\UrlHelper;
+use Piwik\View;
+
 /**
- * @package Piwik_SEO
  */
-class Piwik_SEO_Controller extends Piwik_Controller
-{	
-	function getRank()
-	{
-		$idSite = Piwik_Common::getRequestVar('idSite'); 
-		$site = new Piwik_Site($idSite);
+class Controller extends \Piwik\Plugin\Controller
+{
+    function getRank()
+    {
+        $idSite = Common::getRequestVar('idSite');
+        $site = new Site($idSite);
 
-		$url = urldecode(Piwik_Common::getRequestVar('url', '', 'string'));
+        $url = urldecode(Common::getRequestVar('url', '', 'string'));
 
-		if(empty($url) || @parse_url($url) === false)
-		{
-			$url = $site->getMainUrl();
-		}
+        if (!empty($url) && strpos($url, 'http://') !== 0 && strpos($url, 'https://') !== 0) {
+            $url = 'http://' . $url;
+        }
 
-		$dataTable = Piwik_SEO_API::getInstance()->getRank($url);
-		
-		$view = Piwik_View::factory('index');
-		$view->urlToRank = $url;
-		
-		$renderer = Piwik_DataTable_Renderer::factory('php');
-		$renderer->setSerialize(false);
-		$view->ranks = $renderer->render($dataTable);
-		echo $view->render();
-	}
+        if (empty($url) || !UrlHelper::isLookLikeUrl($url)) {
+            $url = $site->getMainUrl();
+        }
+
+        $dataTable = API::getInstance()->getRank($url);
+
+        $view = new View('@SEO/getRank');
+        $view->urlToRank = RankChecker::extractDomainFromUrl($url);
+
+        /** @var \Piwik\DataTable\Renderer\Php $renderer */
+        $renderer = Renderer::factory('php');
+        $renderer->setSerialize(false);
+        $view->ranks = $renderer->render($dataTable);
+        return $view->render();
+    }
 }

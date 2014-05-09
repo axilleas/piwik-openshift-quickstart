@@ -1,58 +1,59 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
+ *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Controller.php 4588 2011-04-28 10:48:23Z matt $
- * 
- * @category Piwik_Plugins
- * @package Piwik_VisitorInterest
+ *
  */
+namespace Piwik\Plugins\VisitorInterest;
+
+use Piwik\View;
+use Piwik\ViewDataTable\Factory;
 
 /**
- * @package Piwik_VisitorInterest
  */
-class Piwik_VisitorInterest_Controller extends Piwik_Controller 
+class Controller extends \Piwik\Plugin\Controller
 {
-	function index()
-	{
-		$view = Piwik_View::factory('index');
-		$view->dataTableNumberOfVisitsPerVisitDuration = $this->getNumberOfVisitsPerVisitDuration(true);
-		$view->dataTableNumberOfVisitsPerPage = $this->getNumberOfVisitsPerPage(true);
-		echo $view->render();
-	}
-	
-	function getNumberOfVisitsPerVisitDuration( $fetch = false)
-	{
-		$view = Piwik_ViewDataTable::factory( 'cloud' );
-		$view->init( $this->pluginName,  __FUNCTION__, "VisitorInterest.getNumberOfVisitsPerVisitDuration" );
-		
-		$view->setColumnsToDisplay( array('label','nb_visits') );
-		$view->setSortedColumn( 'label', 'asc' );
-		$view->setColumnTranslation('label', Piwik_Translate('VisitorInterest_ColumnVisitDuration'));
-		$view->disableSort();
-		$view->disableExcludeLowPopulation();
-		$view->disableOffsetInformationAndPaginationControls();
-		$view->disableSearchBox();
-		$view->disableShowAllColumns();
-		
-		return $this->renderView($view, $fetch);
-	}
-	
-	function getNumberOfVisitsPerPage( $fetch = false)
-	{
-		$view = Piwik_ViewDataTable::factory( 'cloud' );
-		$view->init( $this->pluginName,  __FUNCTION__, "VisitorInterest.getNumberOfVisitsPerPage" );
-		$view->setColumnsToDisplay( array('label','nb_visits') );
-		$view->setSortedColumn( 'label', 'asc' );
-		$view->setColumnTranslation('label', Piwik_Translate('VisitorInterest_ColumnPagesPerVisit'));
-		$view->disableExcludeLowPopulation();
-		$view->disableOffsetInformationAndPaginationControls();
-		$view->disableSearchBox();
-		$view->disableSort();
-		$view->disableShowAllColumns();
-		
-		return $this->renderView($view, $fetch);
-	}
+    public function index()
+    {
+        $view = new View('@VisitorInterest/index');
+        $view->dataTableNumberOfVisitsPerVisitDuration = $this->getNumberOfVisitsPerVisitDuration(true);
+        $view->dataTableNumberOfVisitsPerPage = $this->getNumberOfVisitsPerPage(true);
+        $view->dataTableNumberOfVisitsByVisitNum = $this->getNumberOfVisitsByVisitCount(true);
+        $view->dataTableNumberOfVisitsByDaysSinceLast = $this->getNumberOfVisitsByDaysSinceLast(true);
+        return $view->render();
+    }
+
+    public function getNumberOfVisitsPerVisitDuration()
+    {
+        return $this->renderReport(__FUNCTION__);
+    }
+
+    public function getNumberOfVisitsPerPage()
+    {
+        return $this->renderReport(__FUNCTION__);
+    }
+
+    /**
+     * Returns a report that lists the count of visits for different ranges of
+     * a visitor's visit number.
+     *
+     * @return string The rendered report or nothing if $fetch is set to false.
+     */
+    public function getNumberOfVisitsByVisitCount()
+    {
+        return $this->renderReport(__FUNCTION__);
+    }
+
+    /**
+     * Returns a rendered report that lists the count of visits for different ranges
+     * of days since a visitor's last visit.
+     *
+     * @return string The rendered report or nothing if $fetch is set to false.
+     */
+    public function getNumberOfVisitsByDaysSinceLast()
+    {
+        return $this->renderReport(__FUNCTION__);
+    }
 }

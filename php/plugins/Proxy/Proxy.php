@@ -1,37 +1,35 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
+ *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Proxy.php 3175 2010-09-25 03:52:17Z vipsoft $
- * 
- * @category Piwik_Plugins
- * @package Piwik_Proxy
+ *
  */
+namespace Piwik\Plugins\Proxy;
+
+use Piwik\Version;
 
 /**
  * Proxy services for the UI
  *
- * @package Piwik_Proxy
  */
-class Piwik_Proxy extends Piwik_Plugin
+class Proxy extends \Piwik\Plugin
 {
-	/**
-	 * Return information about this plugin.
-	 *
-	 * @see Piwik_Plugin
-	 *
-	 * @return array
-	 */
-	public function getInformation()
-	{
-		return array(
-			'description' => 'Proxy services',
-			'author' => 'Piwik',
-			'author_homepage' => 'http://piwik.org/',
-			'version' => Piwik_Version::VERSION,
-			'translationAvailable' => false,
-		);
-	}
+    /**
+     * Return information about this plugin.
+     *
+     * @see Piwik\Plugin
+     *
+     * @return array
+     */
+    public function getInformation()
+    {
+        return array(
+            'description'          => 'Proxy services',
+            'authors'              => array(array('name' => 'Piwik', 'homepage' => 'http://piwik.org/')),
+            'version'              => Version::VERSION,
+            'translationAvailable' => false,
+        );
+    }
 }

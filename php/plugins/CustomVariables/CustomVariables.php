@@ -4,220 +4,212 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: CustomVariables.php 4717 2011-05-17 23:18:17Z matt $
  *
- * @category Piwik_Plugins
- * @package Piwik_CustomVariables
  */
+namespace Piwik\Plugins\CustomVariables;
+
+use Piwik\ArchiveProcessor;
+use Piwik\Menu\MenuMain;
+use Piwik\Piwik;
+use Piwik\Plugin\ViewDataTable;
+use Piwik\Tracker;
+use Piwik\WidgetsList;
+use Piwik\Tracker\Cache;
 
 /**
- * @package Piwik_CustomVariables
  */
-class Piwik_CustomVariables extends Piwik_Plugin
+class CustomVariables extends \Piwik\Plugin
 {
-	public $archiveProcessing;
-	protected $columnToSortByBeforeTruncation;
-	protected $maximumRowsInDataTableLevelZero;
-	protected $maximumRowsInSubDataTable;
-	
-	public function getInformation()
-	{
-		$info = array(
-			'description' => Piwik_Translate('CustomVariables_PluginDescription'),
-			'author' => 'Piwik',
-			'author_homepage' => 'http://piwik.org/',
-			'version' => Piwik_Version::VERSION,
-		);
-		
-		return $info;
-	}
-	
-	function getListHooksRegistered()
-	{
-		$hooks = array(
-			'ArchiveProcessing_Day.compute' => 'archiveDay',
-			'ArchiveProcessing_Period.compute' => 'archivePeriod',
-			'WidgetsList.add' => 'addWidgets',
-			'Menu.add' => 'addMenus',
-			'Goals.getReportsWithGoalMetrics' => 'getReportsWithGoalMetrics',
-			'API.getReportMetadata' => 'getReportMetadata',
-		    'API.getSegmentsMetadata' => 'getSegmentsMetadata',
-		);
-		return $hooks;
-	}
+    public function getInformation()
+    {
+        $info = parent::getInformation();
+        $info['description'] .= ' <br/>Required to use <a href="http://piwik.org/docs/ecommerce-analytics/">Ecommerce Analytics</a> feature!';
+        return $info;
+    }
 
-	function addWidgets()
-	{
-		Piwik_AddWidget( 'General_Visitors', 'CustomVariables_CustomVariables', 'CustomVariables', 'getCustomVariables');
-	}
-	
-	function addMenus()
-	{
-	    Piwik_AddMenu('General_Visitors', 'CustomVariables_CustomVariables', array('module' => 'CustomVariables', 'action' => 'index'), $display = true, $order = 50);
-	}
-	
-	public function getReportMetadata($notification)
-	{
-		$reports = &$notification->getNotificationObject();
-		$reports = array_merge($reports, array(
-        		array(
-        			'category'  => Piwik_Translate('General_Visitors'),
-        			'name'   => Piwik_Translate('CustomVariables_CustomVariables'),
-        			'module' => 'CustomVariables',
-        			'action' => 'getCustomVariables',
-        			'dimension' => Piwik_Translate('CustomVariables_ColumnCustomVariableName'),
-        			'documentation' => Piwik_Translate('CustomVariables_CustomVariablesReportDocumentation', array('<br />', '<a href="http://piwik.org/docs/custom-variables/" target="_blank">', '</a>')),
-        			'order' => 10
-        		),
-    	));
-	}
+    /**
+     * @see Piwik\Plugin::getListHooksRegistered
+     */
+    public function getListHooksRegistered()
+    {
+        $hooks = array(
+            'WidgetsList.addWidgets'          => 'addWidgets',
+            'Menu.Reporting.addItems'         => 'addMenus',
+            'Goals.getReportsWithGoalMetrics' => 'getReportsWithGoalMetrics',
+            'API.getReportMetadata'           => 'getReportMetadata',
+            'API.getSegmentDimensionMetadata' => 'getSegmentsMetadata',
+            'ViewDataTable.configure'         => 'configureViewDataTable'
+        );
+        return $hooks;
+    }
 
-	public function getSegmentsMetadata($notification)
-	{
-		$segments =& $notification->getNotificationObject();
-	    for($i=1; $i <= Piwik_Tracker::MAX_CUSTOM_VARIABLES; $i++)
-	    {
-	        $segments[] = array(
-		        'type' => 'dimension',
-		        'category' => 'CustomVariables_CustomVariables',
-		        'name' => Piwik_Translate('CustomVariables_ColumnCustomVariableName').' '.$i,
-		        'segment' => 'customVariableName'.$i,
-		        'sqlSegment' => 'custom_var_k'.$i,
-	        );
-	        $segments[] = array(
-		        'type' => 'dimension',
-		        'category' => 'CustomVariables_CustomVariables',
-		        'name' => Piwik_Translate('CustomVariables_ColumnCustomVariableValue').' '.$i,
-		        'segment' => 'customVariableValue'.$i,
-		        'sqlSegment' => 'custom_var_v'.$i,
-	        );
-	    }
-	}
-	
-	/**
-	 * Adds Goal dimensions, so that the dimensions are displayed in the UI Goal Overview page
-	 */
-	function getReportsWithGoalMetrics( $notification )
-	{
-		$dimensions =& $notification->getNotificationObject();
-		$dimensions = array_merge($dimensions, array(
-        		array(	'category'  => Piwik_Translate('General_Visit'),
-            			'name'   => Piwik_Translate('CustomVariables_CustomVariables'),
-            			'module' => 'CustomVariables',
-            			'action' => 'getCustomVariables',
-        		),
-    	));
-	}
-	
-	function __construct()
-	{
-		$this->maximumRowsInDataTableLevelZero = Zend_Registry::get('config')->General->datatable_archiving_maximum_rows_referers;
-		$this->maximumRowsInSubDataTable = Zend_Registry::get('config')->General->datatable_archiving_maximum_rows_subtable_referers;
-	}
-	
-	protected $interestByCustomVariables = array();
-	protected $interestByCustomVariablesAndValue = array();
-	
-	/**
-	 * Hooks on daily archive to trigger various log processing
-	 *
-	 * @param Piwik_Event_Notification $notification
-	 * @return void
-	 */
-	public function archiveDay( $notification )
-	{
-		$this->interestByCustomVariables = $this->interestByCustomVariablesAndValue = array();
-		
-		/**
-		 * @var Piwik_ArchiveProcessing_Day
-		 */
-		$this->archiveProcessing = $notification->getNotificationObject();
-		
-		if(!$this->archiveProcessing->shouldProcessReportsForPlugin($this->getPluginName())) return;
-		
-		$this->archiveDayAggregate($this->archiveProcessing);
-		$this->archiveDayRecordInDatabase($this->archiveProcessing);
-		destroy($this->interestByCustomVariables);
-		destroy($this->interestByCustomVariablesAndValue);
-	}
-	
-	/**
-	 * @param Piwik_ArchiveProcessing_Day $archiveProcessing
-	 * @return void
-	 */
-	protected function archiveDayAggregate(Piwik_ArchiveProcessing_Day $archiveProcessing)
-	{
-	    for($i = 1; $i <= Piwik_Tracker::MAX_CUSTOM_VARIABLES; $i++ )
-	    {
-	        $keyField = "custom_var_k".$i;
-	        $valueField = "custom_var_v".$i;
-	        $dimensions = array($keyField, $valueField);
-	        $where = "%s.$keyField != '' AND %s.$valueField != ''";
-	        
-	        // Custom Vars names and values metrics for visits
-	        $query = $archiveProcessing->queryVisitsByDimension($dimensions, $where);
-	        
-        	while($row = $query->fetch() )
-        	{
-        	   if(!isset($this->interestByCustomVariables[$row[$keyField]])) $this->interestByCustomVariables[$row[$keyField]]= $archiveProcessing->getNewInterestRow();
-        	   if(!isset($this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]])) $this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]] = $archiveProcessing->getNewInterestRow();
-        	   $archiveProcessing->updateInterestStats( $row, $this->interestByCustomVariables[$row[$keyField]]);
-        	   $archiveProcessing->updateInterestStats( $row, $this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]]);
-        	}
-        	
-	        // Custom Vars names and values metrics for page views
-	        $query = $archiveProcessing->queryActionsByDimension($dimensions, $where);
-	        $onlyMetricsAvailableInActionsTable = true;
-        	while($row = $query->fetch() )
-        	{
-        	   if(!isset($this->interestByCustomVariables[$row[$keyField]])) $this->interestByCustomVariables[$row[$keyField]]= $archiveProcessing->getNewInterestRow($onlyMetricsAvailableInActionsTable);
-        	   if(!isset($this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]])) $this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]] = $archiveProcessing->getNewInterestRow($onlyMetricsAvailableInActionsTable);
-        	   $archiveProcessing->updateInterestStats( $row, $this->interestByCustomVariables[$row[$keyField]], $onlyMetricsAvailableInActionsTable);
-        	   $archiveProcessing->updateInterestStats( $row, $this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]], $onlyMetricsAvailableInActionsTable);
-        	}
-        	
-        	// Custom Vars names and values metrics for Goals
-        	$query = $archiveProcessing->queryConversionsByDimension($dimensions, $where);
+    public function addWidgets()
+    {
+        WidgetsList::add('General_Visitors', 'CustomVariables_CustomVariables', 'CustomVariables', 'getCustomVariables');
+    }
 
-        	if($query !== false)
-        	{
-        		while($row = $query->fetch() )
-        		{
-    				if(!isset($this->interestByCustomVariables[$row[$keyField]][Piwik_Archive::INDEX_GOALS][$row['idgoal']])) $this->interestByCustomVariables[$row[$keyField]][Piwik_Archive::INDEX_GOALS][$row['idgoal']] = $archiveProcessing->getNewGoalRow($row['idgoal']);
-    				if(!isset($this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]][Piwik_Archive::INDEX_GOALS][$row['idgoal']])) $this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]][Piwik_Archive::INDEX_GOALS][$row['idgoal']] = $archiveProcessing->getNewGoalRow($row['idgoal']);
-    				
-    				$archiveProcessing->updateGoalStats( $row, $this->interestByCustomVariables[$row[$keyField]][Piwik_Archive::INDEX_GOALS][$row['idgoal']]);
-    				$archiveProcessing->updateGoalStats( $row, $this->interestByCustomVariablesAndValue[$row[$keyField]][$row[$valueField]][Piwik_Archive::INDEX_GOALS][$row['idgoal']]);
-        		}
-        	}
-	    }
-		$archiveProcessing->enrichConversionsByLabelArray($this->interestByCustomVariables);
-    	$archiveProcessing->enrichConversionsByLabelArrayHasTwoLevels($this->interestByCustomVariablesAndValue);
-    	
-//    	var_dump($this->interestByCustomVariables);
-//    	var_dump($this->interestByCustomVariablesAndValue);
-	}
-	
-	/**
-	 * @param Piwik_ArchiveProcessing $archiveProcessing
-	 * @return void
-	 */
-	protected function archiveDayRecordInDatabase($archiveProcessing)
-	{
-		$recordName = 'CustomVariables_valueByName';
-		$table = $archiveProcessing->getDataTableWithSubtablesFromArraysIndexedByLabel($this->interestByCustomVariablesAndValue, $this->interestByCustomVariables);
-		$blob = $table->getSerialized($this->maximumRowsInDataTableLevelZero, $this->maximumRowsInSubDataTable);
-		$archiveProcessing->insertBlobRecord($recordName, $blob);
-		destroy($table);
-	}
+    public function addMenus()
+    {
+        MenuMain::getInstance()->add('General_Visitors', 'CustomVariables_CustomVariables', array('module' => 'CustomVariables', 'action' => 'index'), $display = true, $order = 50);
+    }
 
-	function archivePeriod( $notification )
-	{
-		$archiveProcessing = $notification->getNotificationObject();
-		
-		if(!$archiveProcessing->shouldProcessReportsForPlugin($this->getPluginName())) return;
-		
-		$dataTableToSum = 'CustomVariables_valueByName';
-		$nameToCount = $archiveProcessing->archiveDataTable($dataTableToSum, null, $this->maximumRowsInDataTableLevelZero, $this->maximumRowsInSubDataTable);
-	}
+    public function install()
+    {
+        Model::install();
+    }
+
+    public function uninstall()
+    {
+        Model::uninstall();
+    }
+
+    /**
+     * There are also some hardcoded places in JavaScript
+     * @return int
+     */
+    public static function getMaxLengthCustomVariables()
+    {
+        return 200;
+    }
+
+    public static function getMaxCustomVariables()
+    {
+        $cache    = Cache::getCacheGeneral();
+        $cacheKey = 'CustomVariables.MaxNumCustomVariables';
+
+        if (!array_key_exists($cacheKey, $cache)) {
+
+            $maxCustomVar = 0;
+
+            foreach (Model::getScopes() as $scope) {
+                $model = new Model($scope);
+                $highestIndex = $model->getHighestCustomVarIndex();
+
+                if ($highestIndex > $maxCustomVar) {
+                    $maxCustomVar = $highestIndex;
+                }
+            }
+
+            $cache[$cacheKey] = $maxCustomVar;
+            Cache::setCacheGeneral($cache);
+        }
+
+        return $cache[$cacheKey];
+    }
+
+    /**
+     * Returns metadata for available reports
+     */
+    public function getReportMetadata(&$reports)
+    {
+        $documentation = Piwik::translate('CustomVariables_CustomVariablesReportDocumentation',
+            array('<br />', '<a href="http://piwik.org/docs/custom-variables/" target="_blank">', '</a>'));
+
+        $reports[] = array('category'              => Piwik::translate('General_Visitors'),
+                           'name'                  => Piwik::translate('CustomVariables_CustomVariables'),
+                           'module'                => 'CustomVariables',
+                           'action'                => 'getCustomVariables',
+                           'actionToLoadSubTables' => 'getCustomVariablesValuesFromNameId',
+                           'dimension'             => Piwik::translate('CustomVariables_ColumnCustomVariableName'),
+                           'documentation'         => $documentation,
+                           'order'                 => 10);
+
+        $reports[] = array('category'         => Piwik::translate('General_Visitors'),
+                           'name'             => Piwik::translate('CustomVariables_CustomVariables'),
+                           'module'           => 'CustomVariables',
+                           'action'           => 'getCustomVariablesValuesFromNameId',
+                           'dimension'        => Piwik::translate('CustomVariables_ColumnCustomVariableValue'),
+                           'documentation'    => $documentation,
+                           'isSubtableReport' => true,
+                           'order'            => 15);
+    }
+
+    public function getSegmentsMetadata(&$segments)
+    {
+        $maxCustomVariables = self::getMaxCustomVariables();
+
+        for ($i = 1; $i <= $maxCustomVariables; $i++) {
+            $segments[] = array(
+                'type'       => 'dimension',
+                'category'   => 'CustomVariables_CustomVariables',
+                'name'       => Piwik::translate('CustomVariables_ColumnCustomVariableName') . ' ' . $i
+                    . ' (' . Piwik::translate('CustomVariables_ScopeVisit') . ')',
+                'segment'    => 'customVariableName' . $i,
+                'sqlSegment' => 'log_visit.custom_var_k' . $i,
+            );
+            $segments[] = array(
+                'type'       => 'dimension',
+                'category'   => 'CustomVariables_CustomVariables',
+                'name'       => Piwik::translate('CustomVariables_ColumnCustomVariableValue') . ' ' . $i
+                    . ' (' . Piwik::translate('CustomVariables_ScopeVisit') . ')',
+                'segment'    => 'customVariableValue' . $i,
+                'sqlSegment' => 'log_visit.custom_var_v' . $i,
+            );
+            $segments[] = array(
+                'type'       => 'dimension',
+                'category'   => 'CustomVariables_CustomVariables',
+                'name'       => Piwik::translate('CustomVariables_ColumnCustomVariableName') . ' ' . $i
+                    . ' (' . Piwik::translate('CustomVariables_ScopePage') . ')',
+                'segment'    => 'customVariablePageName' . $i,
+                'sqlSegment' => 'log_link_visit_action.custom_var_k' . $i,
+            );
+            $segments[] = array(
+                'type'       => 'dimension',
+                'category'   => 'CustomVariables_CustomVariables',
+                'name'       => Piwik::translate('CustomVariables_ColumnCustomVariableValue') . ' ' . $i
+                    . ' (' . Piwik::translate('CustomVariables_ScopePage') . ')',
+                'segment'    => 'customVariablePageValue' . $i,
+                'sqlSegment' => 'log_link_visit_action.custom_var_v' . $i,
+            );
+        }
+    }
+
+    /**
+     * Adds Goal dimensions, so that the dimensions are displayed in the UI Goal Overview page
+     */
+    public function getReportsWithGoalMetrics(&$dimensions)
+    {
+        $dimensions[] = array('category' => Piwik::translate('General_Visit'),
+                              'name'     => Piwik::translate('CustomVariables_CustomVariables'),
+                              'module'   => 'CustomVariables',
+                              'action'   => 'getCustomVariables',
+        );
+    }
+
+    public function configureViewDataTable(ViewDataTable $view)
+    {
+        switch ($view->requestConfig->apiMethodToRequestDataTable) {
+            case 'CustomVariables.getCustomVariables':
+                $this->configureViewForGetCustomVariables($view);
+                break;
+            case 'CustomVariables.getCustomVariablesValuesFromNameId':
+                $this->configureViewForGetCustomVariablesValuesFromNameId($view);
+                break;
+        }
+    }
+
+    private function configureViewForGetCustomVariables(ViewDataTable $view)
+    {
+        $footerMessage = Piwik::translate('CustomVariables_TrackingHelp',
+            array('<a target="_blank" href="http://piwik.org/docs/custom-variables/">', '</a>'));
+
+        $view->config->columns_to_display = array('label', 'nb_actions', 'nb_visits');
+        $view->config->show_goals = true;
+        $view->config->subtable_controller_action = 'getCustomVariablesValuesFromNameId';
+        $view->config->show_footer_message = $footerMessage;
+        $view->config->addTranslation('label', Piwik::translate('CustomVariables_ColumnCustomVariableName'));
+        $view->requestConfig->filter_sort_column = 'nb_actions';
+        $view->requestConfig->filter_sort_order  = 'desc';
+    }
+
+    private function configureViewForGetCustomVariablesValuesFromNameId(ViewDataTable $view)
+    {
+        $view->config->columns_to_display = array('label', 'nb_actions', 'nb_visits');
+        $view->config->show_goals  = true;
+        $view->config->show_search = false;
+        $view->config->show_exclude_low_population = false;
+        $view->config->addTranslation('label', Piwik::translate('CustomVariables_ColumnCustomVariableValue'));
+        $view->requestConfig->filter_sort_column = 'nb_actions';
+        $view->requestConfig->filter_sort_order  = 'desc';
+    }
 }

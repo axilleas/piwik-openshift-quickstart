@@ -4,61 +4,74 @@
  *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Live.php 3565 2011-01-03 05:49:45Z matt $
  *
- * @category Piwik_Plugins
- * @package Piwik_Live
  */
+namespace Piwik\Plugins\Live;
+
+use Piwik\Menu\MenuMain;
+use Piwik\Plugins\CoreVisualizations\Visualizations\HtmlTable;
+use Piwik\WidgetsList;
+
+require_once PIWIK_INCLUDE_PATH . '/plugins/Live/VisitorLog.php';
 
 /**
  *
- * @package Piwik_Live
  */
-class Piwik_Live extends Piwik_Plugin
+class Live extends \Piwik\Plugin
 {
-	public function getInformation()
-	{
-		return array(
-			'description' => Piwik_Translate('Live_PluginDescription'),
-			'author' => 'Piwik',
-			'author_homepage' => 'http://piwik.org/',
-			'version' => Piwik_Version::VERSION,
-		);
-	}
 
-	function getListHooksRegistered()
-	{
-		return array(
-			'AssetManager.getJsFiles' => 'getJsFiles',
-			'AssetManager.getCssFiles' => 'getCssFiles',
-			'WidgetsList.add' => 'addWidget',
-			'Menu.add' => 'addMenu',
-		);
-	}
-	
-	function getCssFiles( $notification )
-	{
-		$cssFiles = &$notification->getNotificationObject();
-		
-		$cssFiles[] = "plugins/Live/templates/live.css";
-	}	
-	
-	function getJsFiles( $notification )
-	{
-		$jsFiles = &$notification->getNotificationObject();
-		
-		$jsFiles[] = "plugins/Live/templates/scripts/spy.js";
-		$jsFiles[] = "plugins/Live/templates/scripts/live.js";
-	}
+    /**
+     * @see Piwik\Plugin::getListHooksRegistered
+     */
+    public function getListHooksRegistered()
+    {
+        return array(
+            'AssetManager.getJavaScriptFiles'        => 'getJsFiles',
+            'AssetManager.getStylesheetFiles'        => 'getStylesheetFiles',
+            'WidgetsList.addWidgets'                 => 'addWidget',
+            'Menu.Reporting.addItems'                => 'addMenu',
+            'Translate.getClientSideTranslationKeys' => 'getClientSideTranslationKeys',
+            'ViewDataTable.getDefaultType'           => 'getDefaultTypeViewDataTable'
+        );
+    }
 
-	function addMenu()
-	{
-		Piwik_AddMenu('General_Visitors', 'Live_VisitorLog', array('module' => 'Live', 'action' => 'getVisitorLog'));
-	}
+    public function getStylesheetFiles(&$stylesheets)
+    {
+        $stylesheets[] = "plugins/Live/stylesheets/live.less";
+        $stylesheets[] = "plugins/Live/stylesheets/visitor_profile.less";
+    }
 
-	public function addWidget() 
-	{
-		Piwik_AddWidget('Live!', 'Live_VisitorsInRealTime', 'Live', 'widget');
-	}
+    public function getJsFiles(&$jsFiles)
+    {
+        $jsFiles[] = "plugins/Live/javascripts/live.js";
+        $jsFiles[] = "plugins/Live/javascripts/visitorProfile.js";
+        $jsFiles[] = "plugins/Live/javascripts/visitorLog.js";
+    }
 
+    public function addMenu()
+    {
+        MenuMain::getInstance()->add('General_Visitors', 'Live_VisitorLog', array('module' => 'Live', 'action' => 'indexVisitorLog'), true, $order = 5);
+    }
+
+    public function addWidget()
+    {
+        WidgetsList::add('Live!', 'Live_VisitorsInRealTime', 'Live', 'widget');
+        WidgetsList::add('Live!', 'Live_VisitorLog', 'Live', 'getVisitorLog', array('small' => 1));
+        WidgetsList::add('Live!', 'Live_RealTimeVisitorCount', 'Live', 'getSimpleLastVisitCount');
+        WidgetsList::add('Live!', 'Live_VisitorProfile', 'Live', 'getVisitorProfilePopup');
+    }
+
+    public function getClientSideTranslationKeys(&$translationKeys)
+    {
+        $translationKeys[] = "Live_VisitorProfile";
+        $translationKeys[] = "Live_NoMoreVisits";
+        $translationKeys[] = "Live_ShowMap";
+        $translationKeys[] = "Live_HideMap";
+        $translationKeys[] = "Live_PageRefreshed";
+    }
+
+    public function getDefaultTypeViewDataTable(&$defaultViewTypes)
+    {
+        $defaultViewTypes['Live.getLastVisitsDetails'] = VisitorLog::ID;
+    }
 }

@@ -1,73 +1,55 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
+ *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: ExampleUI.php 3865 2011-02-11 20:17:47Z JulienM $
- * 
- * @category Piwik_Plugins
- * @package Piwik_ExampleUI
+ *
  */
 
-/*
-- prepare a page with all use cases
-- test the actions datatable in this page?
-- test datatable with search disabled
-- test datatable with low population disabled
-- without footer
-- without all columns icon
-+ update http://piwik.org/participate/user-interface
-*/
+namespace Piwik\Plugins\ExampleUI;
+use Piwik\Menu\MenuMain;
+use Piwik\Menu\MenuTop;
 
 /**
- *
- * @package Piwik_ExampleUI
  */
-class Piwik_ExampleUI extends Piwik_Plugin
+class ExampleUI extends \Piwik\Plugin
 {
-	/**
-	 * Return information about this plugin.
-	 *
-	 * @see Piwik_Plugin
-	 *
-	 * @return array
-	 */
-	public function getInformation()
-	{
-		return array(
-			'description' => Piwik_Translate('ExampleUI_PluginDescription'),
-			'author' => 'Piwik',
-			'author_homepage' => 'http://piwik.org/',
-			'version' => '0.1',
-		);
-	}
-	
-	function getListHooksRegistered()
-	{
-		$hooks = array(
-			'Menu.add' => 'addMenus',
-		);
-		return $hooks;
-	}
+    /**
+     * @see Piwik\Plugin::getListHooksRegistered
+     */
+    public function getListHooksRegistered()
+    {
+        return array(
+            'Menu.Reporting.addItems' => 'addReportingMenuItems',
+            'Menu.Top.addItems'       => 'addTopMenuItems',
+        );
+    }
 
-	function addMenus()
-	{
-		$menus = array(
-			'Data tables' => 'dataTables',
-			'Evolution graph' => 'evolutionGraph',
-			'Bar graph' => 'barGraph',
-			'Pie graph' => 'pieGraph',
-			'Tag clouds' => 'tagClouds',
-			'Sparklines' => 'sparklines',
-			'Misc' => 'misc',
-		);
+    function addReportingMenuItems()
+    {
+        MenuMain::getInstance()->add('UI Framework', '', array('module' => 'ExampleUI', 'action' => 'dataTables'), true, 30);
 
-		Piwik_AddMenu('UI Framework', '', array('module' => 'ExampleUI', 'action' => 'dataTables'), true, 30);
-		$order = 1;
-		foreach($menus as $subMenu => $action) 
-		{
-			Piwik_AddMenu('UI Framework', $subMenu, array('module' => 'ExampleUI', 'action' => $action), true, $order++);
-		}
-	}	
+        $this->addSubMenu('Data tables', 'dataTables', 1);
+        $this->addSubMenu('Bar graph', 'barGraph', 2);
+        $this->addSubMenu('Pie graph', 'pieGraph', 3);
+        $this->addSubMenu('Tag clouds', 'tagClouds', 4);
+        $this->addSubMenu('Sparklines', 'sparklines', 5);
+        $this->addSubMenu('Evolution Graph', 'evolutionGraph', 6);
+
+        if (\Piwik\Plugin\Manager::getInstance()->isPluginActivated('TreemapVisualization')) {
+            $this->addSubMenu('Treemap', 'treemap', 7);
+        }
+    }
+
+    function addTopMenuItems()
+    {
+        $urlParams = array('module' => 'ExampleUI', 'action' => 'notifications');
+        MenuTop::getInstance()->addEntry('UI Notifications', $urlParams, $displayedForCurrentUser = true, $order = 3);
+    }
+
+    private function addSubMenu($subMenu, $action, $order)
+    {
+        MenuMain::getInstance()->add('UI Framework', $subMenu, array('module' => 'ExampleUI', 'action' => $action), true, $order);
+    }
 }

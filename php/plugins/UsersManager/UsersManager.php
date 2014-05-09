@@ -1,123 +1,154 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
+ *
  * @link http://piwik.org
  * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: UsersManager.php 4417 2011-04-12 04:04:15Z matt $
- * 
- * @category Piwik_Plugins
- * @package Piwik_UsersManager
+ *
  */
+namespace Piwik\Plugins\UsersManager;
+
+use Exception;
+use Piwik\Db;
+use Piwik\Menu\MenuAdmin;
+use Piwik\Option;
+use Piwik\Piwik;
+use Piwik\SettingsPiwik;
 
 /**
  * Manage Piwik users
  *
- * @package Piwik_UsersManager
  */
-class Piwik_UsersManager extends Piwik_Plugin
+class UsersManager extends \Piwik\Plugin
 {
-	/**
-	 * Plugin information
-	 *
-	 * @see Piwik_Plugin
-	 *
-	 * @return array
-	 */
-	public function getInformation()
-	{
-		$info = array(
-			'description' => Piwik_Translate('UsersManager_PluginDescription'),
-			'author' => 'Piwik',
-			'author_homepage' => 'http://piwik.org/',
-			'version' => Piwik_Version::VERSION,
-		);
+    const PASSWORD_MIN_LENGTH = 6;
+    const PASSWORD_MAX_LENGTH = 26;
 
-		return $info;
-	}
+    /**
+     * @see Piwik\Plugin::getListHooksRegistered
+     */
+    public function getListHooksRegistered()
+    {
+        return array(
+            'Menu.Admin.addItems'                    => 'addMenu',
+            'AssetManager.getJavaScriptFiles'        => 'getJsFiles',
+            'AssetManager.getStylesheetFiles'        => 'getStylesheetFiles',
+            'SitesManager.deleteSite.end'            => 'deleteSite',
+            'Tracker.Cache.getSiteAttributes'        => 'recordAdminUsersInCache',
+            'Translate.getClientSideTranslationKeys' => 'getClientSideTranslationKeys',
+            'Platform.initialized'                   => 'onPlatformInitialized'
+        );
+    }
 
-	/**
-	 * Get list of hooks to register.
-	 *
-	 * @see Piwik_PluginsManager.loadPlugin()
-	 *
-	 * @return array
-	 */
-	function getListHooksRegistered()
-	{
-		return array(
-				'AdminMenu.add' => 'addMenu',
-				'AssetManager.getJsFiles' => 'getJsFiles',
-				'SitesManager.deleteSite' => 'deleteSite',
-				'Common.fetchWebsiteAttributes' => 'recordAdminUsersInCache',
-		);
-	}
+    public function onPlatformInitialized()
+    {
+        $lastSeenTimeLogger = new LastSeenTimeLogger();
+        $lastSeenTimeLogger->logCurrentUserLastSeenTime();
+    }
 
-	
-	/**
-	 * Hooks when a website tracker cache is flushed (website/user updated, cache deleted, or empty cache)
-	 * Will record in the tracker config file the list of Admin token_auth for this website. This 
-	 * will be used when the Tracking API is used with setIp(), setForceDateTime(), setVisitorId(), etc. 
-	 * 
-	 * @param Piwik_Event_Notification $notification
-	 * @return void
-	 */
-	function recordAdminUsersInCache($notification)
-	{
-		$idSite = $notification->getNotificationInfo();
-		// add the 'hosts' entry in the website array
-		$users = Piwik_UsersManager_API::getInstance()->getUsersWithSiteAccess($idSite, 'admin');
-		
-		$tokens = array();
-		foreach($users as $user)
-		{
-			$tokens[] = $user['token_auth'];
-		}
-		$array =& $notification->getNotificationObject();
-		$array['admin_token_auth'] = $tokens;
-	}
-	
-	/**
-	 * Delete user preferences associated with a particular site
-	 *
-	 * @param Event_Notification $notification
-	 */
-	function deleteSite( $notification )
-	{
-		$idSite = &$notification->getNotificationObject();
+    /**
+     * Hooks when a website tracker cache is flushed (website/user updated, cache deleted, or empty cache)
+     * Will record in the tracker config file the list of Admin token_auth for this website. This
+     * will be used when the Tracking API is used with setIp(), setForceDateTime(), setVisitorId(), etc.
+     *
+     * @param $attributes
+     * @param $idSite
+     * @return void
+     */
+    public function recordAdminUsersInCache(&$attributes, $idSite)
+    {
+        // add the 'hosts' entry in the website array
+        $users = API::getInstance()->getUsersWithSiteAccess($idSite, 'admin');
 
-		Piwik_Option::getInstance()->deleteLike('%\_'.Piwik_UsersManager_API::PREFERENCE_DEFAULT_REPORT, $idSite);
-	}
+        $tokens = array();
+        foreach ($users as $user) {
+            $tokens[] = $user['token_auth'];
+        }
+        $attributes['admin_token_auth'] = $tokens;
+    }
 
-	/**
-	 * Return list of plug-in specific JavaScript files to be imported by the asset manager
-	 *
-	 * @see Piwik_AssetManager
-	 *
-	 * @param Event_Notification $notification
-	 */
-	function getJsFiles( $notification )
-	{
-		$jsFiles = &$notification->getNotificationObject();
+    /**
+     * Delete user preferences associated with a particular site
+     */
+    public function deleteSite($idSite)
+    {
+        Option::deleteLike('%\_' . API::PREFERENCE_DEFAULT_REPORT, $idSite);
+    }
 
-		$jsFiles[] = "plugins/UsersManager/templates/UsersManager.js";
-		$jsFiles[] = "plugins/UsersManager/templates/userSettings.js";
-	}
+    /**
+     * Return list of plug-in specific JavaScript files to be imported by the asset manager
+     *
+     * @see Piwik\AssetManager
+     */
+    public function getJsFiles(&$jsFiles)
+    {
+        $jsFiles[] = "plugins/UsersManager/javascripts/usersManager.js";
+        $jsFiles[] = "plugins/UsersManager/javascripts/usersSettings.js";
+    }
 
-	/**
-	 * Add admin menu items
-	 *
-	 * @param Event_Notification $notification (not used)
-	 */
-	function addMenu()
-	{
-		Piwik_AddAdminMenu('UsersManager_MenuUsers', 
-							array('module' => 'UsersManager', 'action' => 'index'),
-							Piwik::isUserHasSomeAdminAccess(),
-							$order = 3);
-		Piwik_AddAdminMenu('UsersManager_MenuUserSettings', 
-							array('module' => 'UsersManager', 'action' => 'userSettings'),
-							Piwik::isUserHasSomeViewAccess(),
-							$order = 1);
-	}
+    /**
+     * Get CSS files
+     */
+    function getStylesheetFiles(&$stylesheets)
+    {
+        $stylesheets[] = "plugins/UsersManager/stylesheets/usersManager.less";
+    }
+
+    /**
+     * Add admin menu items
+     */
+    function addMenu()
+    {
+        MenuAdmin::getInstance()->add('CoreAdminHome_MenuManage', 'UsersManager_MenuUsers',
+            array('module' => 'UsersManager', 'action' => 'index'),
+            Piwik::isUserHasSomeAdminAccess(),
+            $order = 2);
+        MenuAdmin::getInstance()->add('CoreAdminHome_MenuManage', 'UsersManager_MenuUserSettings',
+            array('module' => 'UsersManager', 'action' => 'userSettings'),
+            Piwik::isUserHasSomeViewAccess(),
+            $order = 3);
+    }
+
+    /**
+     * Returns true if the password is complex enough (at least 6 characters and max 26 characters)
+     *
+     * @param $input string
+     * @return bool
+     */
+    public static function isValidPasswordString($input)
+    {
+        if (!SettingsPiwik::isUserCredentialsSanityCheckEnabled()
+            && !empty($input)
+        ) {
+            return true;
+        }
+        $l = strlen($input);
+        return $l >= self::PASSWORD_MIN_LENGTH && $l <= self::PASSWORD_MAX_LENGTH;
+    }
+
+    public static function checkPassword($password)
+    {
+        if (!self::isValidPasswordString($password)) {
+            throw new Exception(Piwik::translate('UsersManager_ExceptionInvalidPassword', array(self::PASSWORD_MIN_LENGTH,
+                                                                                                        self::PASSWORD_MAX_LENGTH)));
+        }
+    }
+
+    public static function getPasswordHash($password)
+    {
+        // if change here, should also edit the installation process
+        // to change how the root pwd is saved in the config file
+        return md5($password);
+    }
+
+    public function getClientSideTranslationKeys(&$translationKeys)
+    {
+        $translationKeys[] = "General_OrCancel";
+        $translationKeys[] = "General_Save";
+        $translationKeys[] = "General_Done";
+        $translationKeys[] = "UsersManager_DeleteConfirm";
+        $translationKeys[] = "UsersManager_ConfirmGrantSuperUserAccess";
+        $translationKeys[] = "UsersManager_ConfirmProhibitOtherUsersSuperUserAccess";
+        $translationKeys[] = "UsersManager_ConfirmProhibitMySuperUserAccess";
+    }
 }

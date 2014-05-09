@@ -1,229 +1,345 @@
 <?php
 /**
  * Piwik - Open source web analytics
- * 
- * @link http://piwik.org
- * @license http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
- * @version $Id: Controller.php 4765 2011-05-22 18:52:37Z vipsoft $
- * 
- * @category Piwik_Plugins
- * @package Piwik_Dashboard
+ *
+ * @link     http://piwik.org
+ * @license  http://www.gnu.org/licenses/gpl-3.0.html GPL v3 or later
  */
+namespace Piwik\Plugins\Dashboard;
+
+use Piwik\Common;
+use Piwik\DataTable\Renderer\Json;
+use Piwik\Db;
+use Piwik\Piwik;
+use Piwik\Session\SessionNamespace;
+use Piwik\View;
+use Piwik\WidgetsList;
 
 /**
+ * Dashboard Controller
  *
- * @package Piwik_Dashboard
  */
-class Piwik_Dashboard_Controller extends Piwik_Controller
+class Controller extends \Piwik\Plugin\Controller
 {
-	protected function getDashboardView($template)
-	{
-//		echo '';exit; //DEBUG do not load dashboard
-		$view = Piwik_View::factory($template);
-		$this->setGeneralVariablesView($view);
+    /**
+     * @var Dashboard
+     */
+    private $dashboard;
 
-		$view->availableWidgets = json_encode(Piwik_GetWidgetsList());
-		$layout = $this->getLayout();
-		if(empty($layout)) {
-			$layout = $this->getDefaultLayout();
-		}
-		$view->layout = $layout;
-		return $view;
-	}
-	
-	public function embeddedIndex()
-	{
-		$view = $this->getDashboardView('index');
-		echo $view->render();
-	}
-	
-	public function index()
-	{
-		$view = $this->getDashboardView('standalone');
-		echo $view->render();
-	}
-	
-	/**
-	 * Records the layout in the DB for the given user.
-	 *
-	 * @param string $login
-	 * @param int $idDashboard
-	 * @param string $layout
-	 */
-	protected function saveLayoutForUser( $login, $idDashboard, $layout)
-	{
-		$paramsBind = array($login, $idDashboard, $layout, $layout);
-		Piwik_Query('INSERT INTO '.Piwik_Common::prefixTable('user_dashboard') .
-					' (login, iddashboard, layout)
-						VALUES (?,?,?)
-					ON DUPLICATE KEY UPDATE layout=?',
-					$paramsBind);
-	}
-	
-	/**
-	 * Returns the layout in the DB for the given user, or false if the layout has not been set yet.
-	 * Parameters must be checked BEFORE this function call
-	 *
-	 * @param string $login
-	 * @param int $idDashboard
-	 * @param string|false $layout
-	 */
-	protected function getLayoutForUser( $login, $idDashboard)
-	{
-		$paramsBind = array($login, $idDashboard);
-		$return = Piwik_FetchAll('SELECT layout 
-								FROM '.Piwik_Common::prefixTable('user_dashboard') .
-								' WHERE login = ? 
-									AND iddashboard = ?', $paramsBind);
-		if(count($return) == 0)
-		{
-			return false;
-		}
-		return $return[0]['layout'];
-	}
-	
-	/**
-	 * Saves the layout for the current user
-	 * anonymous = in the session
-	 * authenticated user = in the DB
-	 */
-	public function saveLayout()
-	{
-		$this->checkTokenInUrl();
-		$layout = Piwik_Common::getRequestVar('layout');
-		$idDashboard = Piwik_Common::getRequestVar('idDashboard', 1, 'int' );
-		if(Piwik::isUserIsAnonymous())
-		{
-			$session = new Piwik_Session_Namespace("Piwik_Dashboard");
-			$session->dashboardLayout = $layout;
-			$session->setExpirationSeconds(1800);
-		}
-		else
-		{
-			$this->saveLayoutForUser(Piwik::getCurrentUserLogin(),$idDashboard, $layout);
-		}
-	}
-	
-	/**
-	 * Get the dashboard layout for the current user (anonymous or loggued user) 
-	 *
-	 * @return string $layout
-	 */
-	protected function getLayout()
-	{
-		$idDashboard = Piwik_Common::getRequestVar('idDashboard', 1, 'int' );
+    protected function init()
+    {
+        parent::init();
 
-		if(Piwik::isUserIsAnonymous())
-		{
-			$session = new Piwik_Session_Namespace("Piwik_Dashboard");
-			if(!isset($session->dashboardLayout))
-			{
-				return false;
-			}
-			$layout = $session->dashboardLayout;
-		}
-		else
-		{
-			$layout = $this->getLayoutForUser(Piwik::getCurrentUserLogin(),$idDashboard);
-		}
-	
-		// layout was JSON.stringified
-		$layout = html_entity_decode($layout);
-		$layout = str_replace("\\\"", "\"", $layout);
+        $this->dashboard = new Dashboard();
+    }
 
-		// compatibility with the old layout format
-		if(!empty($layout)
-			&& strstr($layout, '[[') == false) {
-			$layout = "'$layout'";
-		}
-		$layout = $this->removeDisabledPluginFromLayout($layout);
-		return $layout;
-	}
-	
-	protected function removeDisabledPluginFromLayout($layout)
-	{
-		$layout = str_replace("\n", "", $layout);
-		// if the json decoding works (ie. new Json format)
-		// we will only return the widgets that are from enabled plugins
-		if($layoutObject = json_decode($layout, $assoc = false)) 
-		{
-			foreach($layoutObject as &$row) 
-			{
-				if(!is_array($row))
-				{
-					$row = array();
-					continue;
-				}
+    protected function _getDashboardView($template)
+    {
+        $view = new View($template);
+        $this->setGeneralVariablesView($view);
 
-				foreach($row as $widgetId => $widget)
-				{
-					if(isset($widget->parameters->module)) {
-						$controllerName = $widget->parameters->module;
-						$controllerAction = $widget->parameters->action;
-						if(!Piwik_IsWidgetDefined($controllerName, $controllerAction))
-						{
-							unset($row[$widgetId]);
-						}
-					}
-					else
-					{
-						unset($row[$widgetId]);
-					}
-				}
-			}
-			$layout = json_encode($layoutObject);
-		}
-		return $layout;
-	}
-	
-	protected function getDefaultLayout()
-	{
-		$defaultLayout = '[
-    		[
-    			{"uniqueId":"widgetVisitsSummarygetEvolutionGraphcolumnsArray","parameters":{"module":"VisitsSummary","action":"getEvolutionGraph","columns":"nb_visits"}},
-    			{"uniqueId":"widgetLivewidget","parameters":{"module":"Live","action":"widget"}},
-    			{"uniqueId":"widgetVisitorInterestgetNumberOfVisitsPerVisitDuration","parameters":{"module":"VisitorInterest","action":"getNumberOfVisitsPerVisitDuration"}},
-    			{"uniqueId":"widgetExampleFeedburnerfeedburner","parameters":{"module":"ExampleFeedburner","action":"feedburner"}}
-    		],
-    		[
-    			{"uniqueId":"widgetReferersgetKeywords","parameters":{"module":"Referers","action":"getKeywords"}},
-    			{"uniqueId":"widgetReferersgetWebsites","parameters":{"module":"Referers","action":"getWebsites"}}
-    		],
-    		[
-    			{"uniqueId":"widgetUserCountryMapworldMap","parameters":{"module":"UserCountryMap","action":"worldMap"}},
-    			{"uniqueId":"widgetUserSettingsgetBrowser","parameters":{"module":"UserSettings","action":"getBrowser"}},
-    			{"uniqueId":"widgetReferersgetSearchEngines","parameters":{"module":"Referers","action":"getSearchEngines"}},
-    			{"uniqueId":"widgetVisitTimegetVisitInformationPerServerTime","parameters":{"module":"VisitTime","action":"getVisitInformationPerServerTime"}},
-    			{"uniqueId":"widgetExampleRssWidgetrssPiwik","parameters":{"module":"ExampleRssWidget","action":"rssPiwik"}}
-    		]
-    	]';
-		$defaultLayout = $this->removeDisabledPluginFromLayout($defaultLayout);
-		return $defaultLayout;
-	}
+        $view->availableWidgets = Common::json_encode(WidgetsList::get());
+        $view->availableLayouts = $this->getAvailableLayouts();
+
+        $view->dashboardId = Common::getRequestVar('idDashboard', 1, 'int');
+        $view->dashboardLayout = $this->getLayout($view->dashboardId);
+
+        return $view;
+    }
+
+    public function embeddedIndex()
+    {
+        $view = $this->_getDashboardView('@Dashboard/embeddedIndex');
+        return $view->render();
+    }
+
+    public function index()
+    {
+        $view = $this->_getDashboardView('@Dashboard/index');
+        $view->dashboardSettingsControl = new DashboardManagerControl();
+        $view->dashboards = array();
+        if (!Piwik::isUserIsAnonymous()) {
+            $login = Piwik::getCurrentUserLogin();
+
+            $view->dashboards = $this->dashboard->getAllDashboards($login);
+        }
+        return $view->render();
+    }
+
+    public function getDashboardSettingsControl()
+    {
+        $view = new DashboardManagerControl();
+        $result = $view->render();
+
+        if (Common::getRequestVar('includeWidgetFactory', false)) {
+            $factoryTemplateView = new View("@Dashboard/_widgetFactoryTemplate");
+            $result .= $factoryTemplateView->render();
+        }
+
+        return $result;
+    }
+
+    public function getAvailableWidgets()
+    {
+        $this->checkTokenInUrl();
+
+        Json::sendHeaderJSON();
+        return Common::json_encode(WidgetsList::get());
+    }
+
+    public function getDashboardLayout()
+    {
+        $this->checkTokenInUrl();
+
+        $idDashboard = Common::getRequestVar('idDashboard', 1, 'int');
+
+        $layout = $this->getLayout($idDashboard);
+
+        return $layout;
+    }
+
+    /**
+     * Resets the dashboard to the default widget configuration
+     */
+    public function resetLayout()
+    {
+        $this->checkTokenInUrl();
+        $layout = $this->dashboard->getDefaultLayout();
+        $idDashboard = Common::getRequestVar('idDashboard', 1, 'int');
+        if (Piwik::isUserIsAnonymous()) {
+            $session = new SessionNamespace("Dashboard");
+            $session->dashboardLayout = $layout;
+            $session->setExpirationSeconds(1800);
+        } else {
+            $this->saveLayoutForUser(Piwik::getCurrentUserLogin(), $idDashboard, $layout);
+        }
+    }
+
+    /**
+     * Records the layout in the DB for the given user.
+     *
+     * @param string $login
+     * @param int $idDashboard
+     * @param string $layout
+     */
+    protected function saveLayoutForUser($login, $idDashboard, $layout)
+    {
+        $paramsBind = array($login, $idDashboard, $layout, $layout);
+        $query = sprintf('INSERT INTO %s (login, iddashboard, layout) VALUES (?,?,?) ON DUPLICATE KEY UPDATE layout=?',
+            Common::prefixTable('user_dashboard'));
+        Db::query($query, $paramsBind);
+    }
+
+    /**
+     * Updates the name of a dashboard
+     *
+     * @param string $login
+     * @param int $idDashboard
+     * @param string $name
+     */
+    protected function updateDashboardName($login, $idDashboard, $name)
+    {
+        $paramsBind = array($name, $login, $idDashboard);
+        $query = sprintf('UPDATE %s SET name = ? WHERE login = ? AND iddashboard = ?',
+            Common::prefixTable('user_dashboard'));
+        Db::query($query, $paramsBind);
+    }
+
+    /**
+     * Removes the dashboard with the given id
+     */
+    public function removeDashboard()
+    {
+        $this->checkTokenInUrl();
+
+        if (Piwik::isUserIsAnonymous()) {
+            return;
+        }
+
+        $idDashboard = Common::getRequestVar('idDashboard', 1, 'int');
+
+        // first layout can't be removed
+        if ($idDashboard != 1) {
+            $query = sprintf('DELETE FROM %s WHERE iddashboard = ? AND login = ?',
+                Common::prefixTable('user_dashboard'));
+            Db::query($query, array($idDashboard, Piwik::getCurrentUserLogin()));
+        }
+    }
+
+    /**
+     * Outputs all available dashboards for the current user as a JSON string
+     */
+    public function getAllDashboards()
+    {
+        $this->checkTokenInUrl();
+
+        if (Piwik::isUserIsAnonymous()) {
+            Json::sendHeaderJSON();
+            return '[]';
+        }
+
+        $login = Piwik::getCurrentUserLogin();
+        $dashboards = $this->dashboard->getAllDashboards($login);
+
+        Json::sendHeaderJSON();
+        return Common::json_encode($dashboards);
+    }
+
+    /**
+     * Creates a new dashboard for the current user
+     * User needs to be logged in
+     */
+    public function createNewDashboard()
+    {
+        $this->checkTokenInUrl();
+
+        if (Piwik::isUserIsAnonymous()) {
+            return '0';
+        }
+        $user = Piwik::getCurrentUserLogin();
+        $nextId = $this->getNextIdDashboard($user);
+
+        $name = urldecode(Common::getRequestVar('name', '', 'string'));
+        $type = urldecode(Common::getRequestVar('type', 'default', 'string'));
+        $layout = '{}';
+
+        if ($type == 'default') {
+            $layout = $this->dashboard->getDefaultLayout();
+        }
+
+        $query = sprintf('INSERT INTO %s (login, iddashboard, name, layout) VALUES (?, ?, ?, ?)',
+            Common::prefixTable('user_dashboard'));
+        Db::query($query, array($user, $nextId, $name, $layout));
+
+        Json::sendHeaderJSON();
+        return Common::json_encode($nextId);
+    }
+
+    private function getNextIdDashboard($login)
+    {
+        $nextIdQuery = sprintf('SELECT MAX(iddashboard)+1 FROM %s WHERE login = ?',
+            Common::prefixTable('user_dashboard'));
+        $nextId = Db::fetchOne($nextIdQuery, array($login));
+
+        if (empty($nextId)) {
+            $nextId = 1;
+            return $nextId;
+        }
+        return $nextId;
+    }
+
+    public function copyDashboardToUser()
+    {
+        $this->checkTokenInUrl();
+
+        if (!Piwik::hasUserSuperUserAccess()) {
+            return '0';
+        }
+        $login = Piwik::getCurrentUserLogin();
+        $name = urldecode(Common::getRequestVar('name', '', 'string'));
+        $user = urldecode(Common::getRequestVar('user', '', 'string'));
+        $idDashboard = Common::getRequestVar('dashboardId', 0, 'int');
+        $layout = $this->dashboard->getLayoutForUser($login, $idDashboard);
+
+        if ($layout !== false) {
+            $nextId = $this->getNextIdDashboard($user);
+
+            $query = sprintf('INSERT INTO %s (login, iddashboard, name, layout) VALUES (?, ?, ?, ?)',
+                Common::prefixTable('user_dashboard'));
+            Db::query($query, array($user, $nextId, $name, $layout));
+
+            Json::sendHeaderJSON();
+            return Common::json_encode($nextId);
+        }
+    }
+
+    /**
+     * Saves the layout for the current user
+     * anonymous = in the session
+     * authenticated user = in the DB
+     */
+    public function saveLayout()
+    {
+        $this->checkTokenInUrl();
+
+        $layout = Common::unsanitizeInputValue(Common::getRequestVar('layout'));
+        $idDashboard = Common::getRequestVar('idDashboard', 1, 'int');
+        $name = Common::getRequestVar('name', '', 'string');
+        if (Piwik::isUserIsAnonymous()) {
+            $session = new SessionNamespace("Dashboard");
+            $session->dashboardLayout = $layout;
+            $session->setExpirationSeconds(1800);
+        } else {
+            $this->saveLayoutForUser(Piwik::getCurrentUserLogin(), $idDashboard, $layout);
+            if (!empty($name)) {
+                $this->updateDashboardName(Piwik::getCurrentUserLogin(), $idDashboard, $name);
+            }
+        }
+    }
+
+    /**
+     * Saves the layout as default
+     */
+    public function saveLayoutAsDefault()
+    {
+        $this->checkTokenInUrl();
+
+        if (Piwik::hasUserSuperUserAccess()) {
+            $layout = Common::unsanitizeInputValue(Common::getRequestVar('layout'));
+            $paramsBind = array('', '1', $layout, $layout);
+            $query = sprintf('INSERT INTO %s (login, iddashboard, layout) VALUES (?,?,?) ON DUPLICATE KEY UPDATE layout=?',
+                Common::prefixTable('user_dashboard'));
+            Db::query($query, $paramsBind);
+        }
+    }
+
+    /**
+     * Get the dashboard layout for the current user (anonymous or logged user)
+     *
+     * @param int $idDashboard
+     *
+     * @return string $layout
+     */
+    protected function getLayout($idDashboard)
+    {
+        if (Piwik::isUserIsAnonymous()) {
+
+            $session = new SessionNamespace("Dashboard");
+            if (!isset($session->dashboardLayout)) {
+
+                return $this->dashboard->getDefaultLayout();
+            }
+
+            $layout = $session->dashboardLayout;
+        } else {
+            $layout = $this->dashboard->getLayoutForUser(Piwik::getCurrentUserLogin(), $idDashboard);
+        }
+
+        if (!empty($layout)) {
+            $layout = $this->dashboard->removeDisabledPluginFromLayout($layout);
+        }
+
+        if (empty($layout)) {
+            $layout = $this->dashboard->getDefaultLayout();
+        }
+
+        return $layout;
+    }
+
+    /**
+     * Returns all available column layouts for the dashboard
+     *
+     * @return array
+     */
+    protected function getAvailableLayouts()
+    {
+        return array(
+            array(100),
+            array(50, 50), array(67, 33), array(33, 67),
+            array(33, 33, 33), array(40, 30, 30), array(30, 40, 30), array(30, 30, 40),
+            array(25, 25, 25, 25)
+        );
+    }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
